@@ -1,0 +1,394 @@
+import random
+import torch
+from transformers import AutoTokenizer, GemmaTokenizer, LlamaTokenizer
+from torch.utils.data import Dataset
+from torch_geometric.data import Data, Batch
+from torch_geometric.loader import LinkNeighborLoader
+
+from config.config import Config
+from src.data.types import (
+    CustomData,
+    CustomSubData,
+    CustomSubDataWithSuperNode,
+    PretrainDatasetItemOutput,
+    PretrainDatasetOutput,
+)
+from src.data.special_tokens import SpecialToken
+from src.ultra import tasks
+
+
+class PretrainDataset(Dataset):
+    def __init__(self, data: CustomData, tokenizer: GemmaTokenizer, cfg: Config):
+        self.data = data
+        self.tokenizer = tokenizer
+        self.cfg = cfg
+
+    def __len__(self):
+        return self.cfg.train.batch_per_epoch * self.cfg.train.batch_size
+
+    def __getitem__(self, idx) -> PretrainDatasetItemOutput:
+        idx = idx % self.data.target_edge_index.shape[1]
+        triple = (
+            torch.cat(
+                [
+                    self.data.target_edge_index[:, idx],
+                    self.data.target_edge_type[idx].unsqueeze(0),
+                ]
+            )
+            .t()
+            .view(-1, 3)
+        )
+
+        # tasks.negative_sampling(self.data, triple, 2)
+        # 随机采一下别的 entity [暂时不写]
+
+        # 对 h，t，entities 采子图
+        entities = torch.cat([triple[:, 0], triple[:, 1]]).unique()
+        subg = self.sample_from_edge_index(entities)
+
+        # 采样子图中要预测的 triples，以及对应的负样本
+        # TODO cfg task num_mask
+        edge_mask = torch.randperm(subg.target_edge_index.shape[1])[:3]
+        # mask_triples: tris x 3
+        mask_triples = (
+            torch.cat(
+                [
+                    subg.target_edge_index[:, edge_mask],
+                    subg.target_edge_type[edge_mask].unsqueeze(0),
+                ]
+            )
+            .t()
+            .view(-1, 3)
+        )
+
+        #   检查是不是 0 项 pos，其他项 neg
+        # mask_triples: tris x 1+num_neg x 3
+        mask_triples = tasks.negative_sampling(
+            self.data,  # 这里使用完整图来筛选负样本
+            mask_triples,
+            self.cfg.task.num_negative,
+            strict=self.cfg.task.strict_negative,
+            limit_nodes=subg.n_id,
+        )
+        # FIXME 将 mask_triples 中的 n_id 转成新的子图中的 n_id, 重新标记 [暂时不写]
+
+        # 随机 mask 一下文本信息或者结构信息 [暂时不写]
+
+        # 创建 super_node, 并创建一条特殊的 edge_type
+        subg = self.insert_super_node(subg)
+
+        # 构建 relation graph
+        #   a. 从 subg 中提取出所有的 relation graph [暂时不写]
+        #       subg = tasks.build_relation_graph(subg)
+        #   b. 使用完整的 graph 的 relation graph，这样不会丢失 query rel，否则可能会缺失某些 rel
+        assert self.data.relation_graph is not None, "relation graph is None"
+        relg = self.data.relation_graph
+
+        # 编写 rel_g, ent_g 的 prompt
+        #   a. 各子图单独一个 prompt [暂时不写]
+        #   b. 子图 batch 成一个 g，直接 concat 三元组即可，共享同一个 prompt
+        relg_prompt, rel_ids = self.create_prompt(relg, "relation")
+        entg_prompt, _ = self.create_prompt(subg, "entity")
+        prompt_ids = self.tokenize([relg_prompt, entg_prompt])
+
+        # 记录各 mask 的节点、负样本在 g、prompt 中的位置，方便在 model encode 后收集特征
+        (
+            rel_ranges,
+            ent_ranges,
+            rel_begin_idx,
+            rel_end_idx,
+            ent_begin_idx,
+            ent_end_idx,
+        ) = self.record_node_idx_range(rel_ids, prompt_ids, mask_triples)
+
+        return PretrainDatasetItemOutput(
+            mask_triples=mask_triples,
+            data=subg,
+            ent_prompt=prompt_ids[1],
+            rel_prompt=prompt_ids[0],
+            rel_begin_idx=rel_begin_idx,
+            rel_end_idx=rel_end_idx,
+            rel_ranges=rel_ranges,
+            ent_begin_idx=ent_begin_idx,
+            ent_end_idx=ent_end_idx,
+            ent_ranges=ent_ranges,
+        )
+
+    @staticmethod
+    def collate_fn(batch: list[PretrainDatasetItemOutput]) -> PretrainDatasetOutput:
+        mask_triples = torch.stack([i.mask_triples for i in batch])
+        data = Batch.from_data_list([i.data for i in batch])
+        data_rel = Batch.from_data_list([i.data.relation_graph for i in batch])
+        data.relation_graph = data_rel
+        ent_prompt = torch.stack([i.ent_prompt for i in batch])
+        rel_prompt = torch.stack([i.rel_prompt for i in batch])
+        # idx ranges in prompt
+        rel_begin_idx = torch.tensor([i.rel_begin_idx for i in batch])
+        rel_end_idx = torch.tensor([i.rel_end_idx for i in batch])
+        rel_ranges = [i.rel_ranges for i in batch]
+
+        ent_begin_idx = torch.tensor([i.ent_begin_idx for i in batch])
+        ent_end_idx = torch.tensor([i.ent_end_idx for i in batch])
+        ent_ranges = [i.ent_ranges for i in batch]
+
+        return PretrainDatasetOutput(
+            mask_triples=mask_triples,
+            data=data,
+            data_rel=data_rel,
+            ent_prompt=ent_prompt,
+            rel_prompt=rel_prompt,
+            rel_begin_idx=rel_begin_idx,
+            rel_end_idx=rel_end_idx,
+            rel_ranges=rel_ranges,
+            ent_begin_idx=ent_begin_idx,
+            ent_end_idx=ent_end_idx,
+            ent_ranges=ent_ranges,
+        )
+
+    def sample_from_edge_index(self, entities: torch.Tensor) -> CustomSubData:
+        """
+        edge_index: 2 x n or n
+        edge_index 可以不存在，会从这两个点开始采样
+        # 获取原始 edge_index: sub_g.n_id[sub_g.edge_index]
+        # 额外的字段: n_id, e_id, Optional[src_index, dst_pos_index, dst_neg_index]
+        #   edge_label_index: 是指从 n_id 的指定节点开始采样
+        """
+        # negative_sampler = NegativeSampling(mode="triplet", amount=1)
+        negative_sampler = None
+
+        if entities.shape[0] % 2 != 0:
+            entities = torch.cat([entities, torch.tensor(entities[-1])])
+        # edge_index 为 2 x n 的 tensor
+        edge_index = entities.view(2, -1)
+
+        loader = LinkNeighborLoader(
+            data=self.data,
+            num_neighbors=[-1, -1],
+            edge_label_index=edge_index,
+            subgraph_type="directional",
+            disjoint=False,  # 待测试
+            neg_sampling=negative_sampler,
+            batch_size=edge_index.shape[1],
+        )
+
+        # batch size 设为 edge_index.shape[1]，即仅需要一次 iter 即可采样完所有 edge_index
+        sub_g: CustomSubData = next(iter(loader))
+
+        # 过滤掉 逆向 的 edge
+        target_index = sub_g.e_id[sub_g.e_id < sub_g.target_edge_type.shape[0]]
+        sub_g.target_edge_index = sub_g.target_edge_index[:, target_index]
+        sub_g.target_edge_type = sub_g.target_edge_type[target_index]
+
+        return sub_g
+
+    def insert_super_node(
+        self, g: CustomSubDataWithSuperNode
+    ) -> CustomSubDataWithSuperNode:
+        s_n_id = g.num_nodes
+        s_edge_index = torch.tensor(
+            [[i, s_n_id] for i in range(g.num_nodes)]
+            + [[s_n_id, i] for i in range(g.num_nodes)],
+            dtype=torch.long,
+        ).t()
+        s_edge_type = torch.tensor(
+            [g.num_edge_types] * g.num_nodes + [g.num_edge_types + 1] * g.num_nodes,
+            dtype=torch.long,
+        )
+
+        new_edge_index = torch.cat([g.edge_index, s_edge_index], dim=1)
+        new_edge_type = torch.cat([g.edge_type, s_edge_type], dim=0)
+
+        g.super_node_id = s_n_id
+        g.super_edge_type = torch.tensor(
+            [g.num_edge_types, g.num_edge_types + 1], dtype=torch.long
+        )
+        g.begin_super_edge_index = g.edge_index.shape[1]
+
+        g.edge_index = new_edge_index
+        g.edge_type = new_edge_type
+
+        g.num_nodes = g.super_node_id + 1
+        g.num_edge_types = g.super_edge_type.max().item() + 1
+        return g
+
+    def create_prompt(self, g: Data, mode: str) -> tuple[str, list[int]]:
+        """
+        根据 graph 中的 node, 构建 prompt
+        """
+        assert mode in ["entity", "relation"], "mode should be 'entity' or 'relation'"
+
+        prefix = """Below, I will provide a description document of a Knowledge Graph (KG), showcasing the text information for some nodes within this KG. It will be presented in a specific format:
+Example:
+<graph-begin> [ENTITY 1] Description of entity node 1 [ENTITY 2] Description of entity node 2 <graph-end>
+<graph-begin> [RELATION 1] Description of relation node 1[RELATION 2] Description of relation node 2 <graph-end>
+(1) Each KG information will start with <graph-begin> and end with <graph-end>;
+(2) Nodes are identified by two types: [ENTITY XX] and [RELATION YY]. "ENTITY" indicates that the node is an entity node, and "RELATION" indicates that the node is a relation node, where XX and YY represent their respective numbers.
+(3) The graph is divided into two types: entity graph, where all nodes are ENTITY nodes, and relation graph, where all nodes are RELATION nodes.
+
+Next, I will provide an actual description of a KG:
+"""
+        items: list[tuple[str, int]] = []
+        if mode == "entity":
+            descs = self.data.text_data.ent_desc
+            # entity id 不会因为 构建逆向边 而增加
+            # FIXME 这里应该使用 子图中的id写入 prompt，而不是全图的id
+            for i in g.n_id.cpu().tolist():
+                items.append((f"[ENTITY {i}] {descs[i][0]}", i))
+        else:
+            descs = self.data.text_data.rel_desc
+            # relation id 会因为 构建逆向边 而增加 2 倍
+            # g 也是 relation graph
+            assert (
+                g.num_nodes % 2 == 0
+            ), "relation graph should have even number of nodes"
+            for i in range(g.num_nodes // 2):
+                items.append((f"[RELATION {i}] {descs[i][0]}", i))
+
+        # shuffle items
+        random.shuffle(items)
+        return prefix + SpecialToken.G_BEGIN.value + " " + " ".join(
+            [i[0] for i in items]
+        ) + " " + SpecialToken.G_END.value, [i[1] for i in items]
+
+    def tokenize(self, texts: list[str], truncate: bool = True) -> torch.Tensor:
+        input_ids = self.tokenizer(
+            texts,
+            return_tensors="pt",
+            padding="max_length",
+            max_length=1024 * 8,  #  Gemma supports up to 8k tokens
+            truncation=truncate,
+        )["input_ids"]
+
+        # TODO 若被 trucation，需要修整
+        return input_ids
+
+    def record_node_idx_range(
+        self, rel_ids: list[int], prompt_ids: torch.Tensor, mask_triples: torch.Tensor
+    ):
+        """
+        rel_ids: 按 prompt 中出现顺序的 rel-id
+        prompt_ids: 2 x 8k, 0 为 rel prompt, 1 为 ent prompt
+        mask_triples: tris x 1+num_neg x 3
+        记录各 mask 的节点、负样本在 g、prompt 中的位置，方便在 model encode 后收集特征
+        :return: all rel node, masked entity, g-begin, g-end
+        rel-range, ent-range 均为稀疏张量sparse_coo_tensor, 读时需要使用 [idx][0] 得到值
+            # 准备索引和值
+            ids = [[3, 5], [0, 0]]
+            vals = [[1, 2], [4, 7]]
+
+            # 创建稀疏张量
+            sparse_tensor = torch.sparse_coo_tensor(ids, vals, dtype=torch.float32)
+
+            # 访问指定ID对应的值
+            id_to_access = 3
+            print(f"ID {id_to_access} 对应的值为: {sparse_tensor[id_to_access][0]}")
+        """
+        pass
+        # for rel node range
+        tokens = self.tokenizer.convert_ids_to_tokens(prompt_ids[0])
+        ranges: list[tuple[int, int]] = []
+
+        special_token_const_num = 4
+        _g_begin_num, g_begin_idx, g_end_idx = 0, 0, 0
+        last_b_idx = -1
+        prefixs = self.tokenizer.tokenize(" [RELATION")
+        for i, token in enumerate(tokens):
+            # 先找到 <graph-begin>
+            if (
+                token != SpecialToken.G_BEGIN.value
+                and _g_begin_num < special_token_const_num
+            ):
+                continue
+            if token == SpecialToken.G_BEGIN.value:
+                _g_begin_num += 1
+                if _g_begin_num == special_token_const_num:
+                    g_begin_idx = i
+                continue
+            if (
+                token == SpecialToken.G_END.value
+                and _g_begin_num == special_token_const_num
+            ):
+                g_end_idx = i
+                if last_b_idx != -1:
+                    ranges.append((last_b_idx, i - 1))
+                break
+
+            # ' [RELATION 123]' -> _[, RELATION, _, 1, 2, 3, ]
+            if token == prefixs[0] and tokens[i + 1] == prefixs[1]:
+                if last_b_idx == -1:
+                    last_b_idx = i
+                else:
+                    ranges.append((last_b_idx, i - 1))
+                    last_b_idx = i
+        indices = [rel_ids, [0] * len(rel_ids)]
+        rel_ranges = torch.sparse_coo_tensor(
+            indices,
+            ranges,
+        )
+        rel_begin_idx = g_begin_idx
+        rel_end_idx = g_end_idx
+
+        # for ent node range
+        tokens = self.tokenizer.convert_ids_to_tokens(prompt_ids[1])
+        ranges = []
+        entities = mask_triples[:, :, :2].unique().cpu().tolist()
+        ent_desc_prefixs = [" [ENTITY"]
+        ent_desc_prefixs.extend([f" [ENTITY {i}]" for i in entities])
+        desc_prefix = self.tokenizer.tokenize(ent_desc_prefixs[0])
+        g_begin_token = self.tokenizer.tokenize(SpecialToken.G_BEGIN.value)
+        g_end_token = self.tokenizer.tokenize(SpecialToken.G_END.value)
+
+        # 开始查找
+        g_begin_idx = find_subsequence_in_list(tokens, g_begin_token, 4)
+        for ent_desc_prefix in ent_desc_prefixs[1:]:
+            _prefix = self.tokenizer.tokenize(ent_desc_prefix)
+            b_idx = find_subsequence_in_list(tokens, _prefix, start_index=g_begin_idx)
+            assert b_idx != -1, f"can't find {ent_desc_prefix} in prompt"
+            e_idx = find_subsequence_in_list(
+                tokens, desc_prefix, start_index=b_idx + len(_prefix)
+            )
+            if e_idx == -1:
+                g_end_idx = find_subsequence_in_list(
+                    tokens, g_end_token, 1, start_index=b_idx + len(_prefix)
+                )
+                assert g_end_idx != -1, f"can't find g_end in prompt"
+                e_idx = g_end_idx
+            ranges.append((b_idx, e_idx - 1))
+
+        indices = [entities, [0] * len(entities)]
+        ent_ranges = torch.sparse_coo_tensor(
+            indices,
+            ranges,
+        )
+        ent_begin_idx = g_begin_idx
+        ent_end_idx = g_end_idx
+
+        return (
+            rel_ranges,
+            ent_ranges,
+            rel_begin_idx,
+            rel_end_idx,
+            ent_begin_idx,
+            ent_end_idx,
+        )
+
+
+def find_subsequence_in_list(
+    lst: list[str], subseq: list[str], occurrence=1, start_index=0
+):
+    subseq_length = len(subseq)  # 子序列的长度
+    if start_index < 0 or start_index >= len(lst):
+        return -1  # 如果起始索引无效，直接返回 -1
+
+    max_index = len(lst) - subseq_length + 1  # 可以检查子序列的最大起始索引
+    count = 0  # 用于计数找到的子序列次数
+
+    # 从指定的起始索引开始遍历
+    for i in range(start_index, max_index):
+        # 使用切片检查从当前索引开始的子列表是否与目标子序列匹配
+        if lst[i : i + subseq_length] == subseq:
+            count += 1
+            if count == occurrence:
+                return i  # 找到第 `occurrence` 次出现，返回子序列的起始索引
+
+    return -1  # 如果列表中没有找到指定次数的子序列，返回 -1

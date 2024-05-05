@@ -1,0 +1,39 @@
+# Python files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Virtual Environment
+venv/
+*.venv
+.env
+
+
+# Datasets
+*.csv
+*.tsv
+*.xlsx
+
+# Machine Learning Model Files
+*.h5
+*.model
+
+# Logs
+logs/
+
+# Other
+.DS_Store
+*.log
+*.swp
+*.bak
+*.tmp
+
+hf_models/
+/data
+!/src/data/
+output/
+config/**/*.yaml

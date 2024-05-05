@@ -1,0 +1,17 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+torch = ">=2.1.0"
+torch-scatter = ">=2.1.2"
+torch-geometric = ">=2.4.0"
+ninja = "*"
+easydict = "*"
+pyyaml = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"
