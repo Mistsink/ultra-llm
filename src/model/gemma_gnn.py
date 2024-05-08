@@ -36,6 +36,25 @@ class GNNLLMModel(GemmaModel):
         self.graph_model = self.__init_graph_models(cfg)
 
         self.exchange_info_layer = self.__init_exchange_info_layer(config, cfg)
+        self.llm_to_rel_layer = MLP(
+            config.hidden_size * 2,
+            config.hidden_size,
+            cfg.model.relation_model.input_dim,
+            2,
+        )
+        self.llm_to_ent_layer = MLP(
+            config.hidden_size * 2,
+            config.hidden_size,
+            cfg.model.entity_model.input_dim,
+            2,
+        )
+
+        self.fuse_llm_ent_layer = MLP(
+            config.hidden_size * 2 + cfg.model.entity_model.hidden_dims[-1],
+            config.hidden_size,
+            config.hidden_size,
+            2,
+        )
 
     def __init_graph_models(self, config: Config) -> GNNModel:
         return GNNModel(config)
@@ -62,7 +81,7 @@ class GNNLLMModel(GemmaModel):
         # custom Embedding for special tokens
         self.special_input_emb = nn.Embedding(
             num_new_tokens, self.embed_tokens.weight.size(1)
-        )
+        ).to(self.device)
         self.id_to_special_index = {
             token_id: i for i, token_id in enumerate(self.special_ids)
         }
@@ -96,6 +115,8 @@ class GNNLLMModel(GemmaModel):
         use_cache,
         past_key_values,
         cache_position,
+        position_ids,
+        model_input: Optional[ModelInput] = None,
         embeds: Optional[torch.FloatTensor] = None,
     ):
         output_attentions = self.config.output_attentions
@@ -119,7 +140,9 @@ class GNNLLMModel(GemmaModel):
             inputs_embeds = self.embed_tokens(input_ids)
             # >>> Replace special token embeddings <<<
             inputs_embeds = self.__replace_common_special_token_emb(
-                input_ids=input_ids, inputs_embeds=inputs_embeds
+                input_ids=input_ids,
+                inputs_embeds=inputs_embeds,
+                model_input=model_input,
             )
 
             # >>> Replace info token embeddings when as decoder <<<
@@ -145,7 +168,7 @@ class GNNLLMModel(GemmaModel):
             position_ids = cache_position.unsqueeze(0)
 
         causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position
+            attention_mask, inputs_embeds, cache_position, past_seen_tokens
         )
 
         normalizer = torch.tensor(
@@ -164,25 +187,28 @@ class GNNLLMModel(GemmaModel):
         )
 
     def __replace_common_special_token_emb(
-        self, input_ids: torch.Tensor, inputs_embeds: torch.Tensor
+        self,
+        input_ids: torch.Tensor,
+        inputs_embeds: torch.Tensor,
+        model_input: Optional[ModelInput] = None,
     ) -> torch.Tensor:
         """
         原本的词表是不可学习的，这里将新增的特殊 token 的 emb 替换为可学习的 emb
         :return: replaced inputs_embeds
         """
-        for i in range(input_ids.size(0)):
-            _input_ids = input_ids[i]
-            _inputs_embed = inputs_embeds[i]
-            for j, _id in enumerate(_input_ids):  # TODO FIXME 太耗时了
-                _id = _id.cpu().item()
-                if _id not in self.id_to_special_index:
-                    continue
-                __idx = torch.tensor(self.id_to_special_index[_id]).to(
-                    self.special_input_emb.weight.device
-                )
-                # _inputs_embed[j] = self.special_input_emb(__idx)
-                inputs_embeds[i][j] = self.special_input_emb(__idx)
+        token = self.tokenizer.tokenize(SpecialToken.G_BEGIN.value)[0]
+        _id = self.tokenizer.convert_tokens_to_ids(token)
+        __idx = torch.tensor(self.id_to_special_index[_id]).to(
+            self.special_input_emb.weight.device
+        )
+        inputs_embeds[:, model_input.g_begin_idx] = self.special_input_emb(__idx)
 
+        token = self.tokenizer.tokenize(SpecialToken.G_END.value)[0]
+        _id = self.tokenizer.convert_tokens_to_ids(token)
+        __idx = torch.tensor(self.id_to_special_index[_id]).to(
+            self.special_input_emb.weight.device
+        )
+        inputs_embeds[:, model_input.g_end_idx] = self.special_input_emb(__idx)
         return inputs_embeds
 
     def __replace_info_token_emb(
@@ -236,6 +262,8 @@ class GNNLLMModel(GemmaModel):
             use_cache,
             past_key_values,
             cache_position,
+            position_ids,
+            model_input=model_input,
             embeds=embeds,
         )
         """
@@ -285,6 +313,7 @@ class GNNLLMModel(GemmaModel):
         normalizer = torch.tensor(self.config.hidden_size**0.5, dtype=hidden_states.dtype)
         hidden_states = hidden_states * normalizer
         """
+        hidden_states = inputs_embeds
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -338,8 +367,11 @@ class GNNLLMModel(GemmaModel):
         hidden_states = self.norm(hidden_states)
 
         # TODO R-GNN & LLM generate rel emb
-        if model_input is not None and not model_input.is_ent:
-            rel_emb = self.interact_rel_gnn(model_input, hidden_states)
+        if model_input is not None:
+            if model_input.is_ent:
+                ent_emb = self.fuse_llm_ent(model_input, hidden_states, ent_emb)
+            else:
+                rel_emb = self.interact_rel_gnn(model_input, hidden_states)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:
@@ -369,6 +401,28 @@ class GNNLLMModel(GemmaModel):
             attentions=all_self_attns,
         )
 
+    def fuse_llm_ent(self, model_input: ModelInput, hidden_states: torch.Tensor, ent_state: torch.Tensor) -> torch.Tensor:
+        bs = len(model_input.ranges)
+        assert bs == 1, "暂时只支持 batch_size = 1, 否则显存会爆"
+        model_input.mask_triples = model_input.mask_triples.squeeze(0)
+        boundary = torch.zeros(
+            bs,
+            model_input.data[0].num_nodes,
+            hidden_states.shape[2] * 2,
+            device=self.device,
+        )
+        for i, ranges in enumerate(model_input.ranges):
+            for _i, j in enumerate(model_input.data[i].n_id):
+                assert ranges[j][0][0] != 0, "确保每个 entity 都在 LLM 的prompt中出现过"
+                boundary[i, _i] = hidden_states[i, ranges[j][0]].view(-1)
+
+            # 单独处理 super_node
+            boundary[i, model_input.data[i].super_node_id] = hidden_states[i, [model_input.g_begin_idx, model_input.g_end_idx]].view(-1)
+
+        feat = torch.cat([boundary, ent_state], dim=2)
+        feat = self.fuse_llm_ent_layer(feat)
+        return feat
+
     def interact_ent_gnn(
         self, model_input: ModelInput, hidden_states: torch.Tensor, i: int
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -376,18 +430,40 @@ class GNNLLMModel(GemmaModel):
         :return: ent_emb, llm_feat
         """
         idx = i - (self.encoder_layers_num - self.interact_layers_num)
-        # 将 LLM 输出转为 GNN中的 boundary
 
-        ent_emb = self.graph_model(model_input, boundary=None, layer_idx=idx)
-        
-        
+        # 将 LLM 输出转为 GNN中的 boundary
+        boundary = None
+        # TODO 每一层的 boundary 都使用更新后的 LLM_hidden_feat 来构建
+        if idx >= 0:
+            bs = len(model_input.ranges)
+            assert bs == 1, "暂时只支持 batch_size = 1, 否则显存会爆"
+            model_input.mask_triples = model_input.mask_triples.squeeze(0)
+            boundary = torch.zeros(
+                bs,
+                model_input.data[0].num_nodes,
+                hidden_states.shape[2] * 2,
+                device=self.device,
+            )
+            for i, ranges in enumerate(model_input.ranges):
+                for _i, j in enumerate(model_input.data[i].n_id):
+                    assert ranges[j][0][0] != 0, "确保每个 entity 都在 LLM 的prompt中出现过"
+                    boundary[i, _i] = hidden_states[i, ranges[j][0]].view(-1)
+
+                # 单独处理 super_node
+                boundary[i, model_input.data[i].super_node_id] = hidden_states[i, [model_input.g_begin_idx, model_input.g_end_idx]].view(-1)
+                
+            boundary: torch.Tensor = self.llm_to_ent_layer(boundary)
+
+        ent_emb = self.graph_model(model_input, boundary=boundary, layer_idx=idx)
+        # ent_emb: (1, num_nodes + 1, out_dim)
+
         # TODO 需要 Debug 来确定怎么写
-        g_super_node_idxs, ex_t_token_idxs, ex_h_token_idxs = -1, -1, -1
         # TODO 可能需要得到特殊 node 的emb，与 llm 的特殊 token 融合
         #  1. 从 graph 中得到特殊 node 的emb
-        gnn_ent_feat = ent_emb[g_super_node_idxs]
+        gnn_ent_feat = ent_emb[:, -1]
         #  2. 从 llm 的输出中得到特殊 token 的emb
-        llm_feat = torch.gather(hidden_states, 1, ex_t_token_idxs).squeeze(1)
+        # llm_feat = torch.gather(hidden_states, 1, ex_t_token_idxs).squeeze(1)
+        llm_feat = hidden_states[:, model_input.g_end_idx].squeeze(1)
         # llm_feat = hidden_states[:, ex_token_idxs, :]  # TODO 这个地方可能写错了
         #  3. 融合
         fused_node_feats = torch.cat([gnn_ent_feat, llm_feat], dim=1)
@@ -397,18 +473,24 @@ class GNNLLMModel(GemmaModel):
             [gnn_ent_feat.size(1), llm_feat.size(1)],
             dim=1,
         )
-        gnn_ent_feat = gnn_ent_feat.to(dtype=ent_emb.dtype)
+        # gnn_ent_feat = gnn_ent_feat.to(dtype=ent_emb.dtype)
         #  4. 替换特殊 token 的 emb
-        ent_emb_copy = ent_emb.clone()
+        # ent_emb_copy = ent_emb.clone()
 
         # 更新特定索引位置的值
-        ent_emb_copy.index_copy_(0, g_super_node_idxs, gnn_ent_feat)
+#         ent_emb_copy.index_copy_(0, torch.tensor([237], device=gnn_ent_feat.device), gnn_ent_feat.unsqueeze(0))
+# Traceback (most recent call last):
+#   File "<string>", line 1, in <module>
+# RuntimeError: index_copy_(): Source/destination tensor must have same slice shapes. Destination slice shape: 238 64 at dimension 0 and source slice shape: 1 64 at dimension 0.
+        ent_emb.index_copy_(1, torch.tensor([ent_emb.shape[1]-1], device=ent_emb.device), gnn_ent_feat.unsqueeze(0))
 
         # 使用更新后的副本替换原始的ent_emb
-        ent_emb = ent_emb_copy
+        # ent_emb = ent_emb_copy
 
         # FIXME：替换掉 1 位置的 token emb，这个位置是 <graph-exchange-head>
-        hidden_states = hidden_states.scatter(1, ex_h_token_idxs, llm_feat.unsqueeze(1))
+        hidden_states.index_copy_(1, model_input.g_begin_idx, llm_feat.unsqueeze(0))
+        # hidden_states = hidden_states.scatter(1, model_input.g_end_idx.unsqueeze(1), llm_feat.unsqueeze(1))
+        # hidden_states = hidden_states.scatter(1, ex_h_token_idxs, llm_feat.unsqueeze(1))
 
         return ent_emb, hidden_states
 
@@ -418,8 +500,29 @@ class GNNLLMModel(GemmaModel):
         """
         :return: rel_emb
         """
-        # 将 LLM 输出转为 GNN中的 boundary
+        # 将 LLM 输出转为 R-GNN 中的 boundary
 
-        rel_emb = self.graph_model(model_input, boundary=None, layer_idx=-1)
+        bs = len(model_input.ranges)
+        # r-gnn 取整个 rel-graph，num_nodes // 2 个节点均有特征
+        # 同时这里假设每个 item 的 rel-graph 都是一样的 num_nodes
+        boundary = torch.zeros(
+            bs,
+            model_input.data[0].num_nodes // 2,
+            hidden_states.shape[2] * 2,
+            device=self.device,
+        )
+        for i, ranges in enumerate(model_input.ranges):
+            for j in range(model_input.data[i].num_nodes // 2):
+                boundary[i, j] = hidden_states[i, ranges[j][0]].view(-1)
+
+        boundary: torch.Tensor = self.llm_to_rel_layer(boundary)
+
+        # GNN 中有 real_nodes * 2 * bs 个节点
+        # 有逆向边，故 * 2
+        # 有 Batch, 故 * bs
+        # TODO FIXME 这里简单将 原始边的emb作为 逆向边 的特征
+        boundary = boundary.repeat(1, 2, 1)
+
+        rel_emb = self.graph_model(model_input, boundary=boundary, layer_idx=-1)
 
         return rel_emb

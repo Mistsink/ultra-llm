@@ -9,6 +9,9 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/script/demo_pretrain.py",
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "4"
+            },
             "justMyCode": false
         },
         {

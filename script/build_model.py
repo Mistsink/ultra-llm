@@ -77,25 +77,32 @@ def build_tokenizer(cfg: Config) -> GemmaTokenizer:
 def build_model(
     cfg: Config, tokenizer: AutoTokenizer, num_new_tokens: int
 ) -> PeftModel:
-    # bnb_config = BitsAndBytesConfig(
-    #     load_in_4bit=True,
-    #     bnb_4bit_use_double_quant=True,
-    #     bnb_4bit_quant_type="nf4",
-    #     bnb_4bit_compute_dtype=torch.float32,
-    #     # llm_int8_threshold=6.0,
-    #     llm_int8_has_fp16_weight=False,
-    #     llm_int8_skip_modules=[
-    #         "lm_head",
-    #         "graph_model",
-    #         "exchange_info_layer",
-    #         "fusion_layer",
-    #     ],
-    # )
+    custom_layers = [
+        "lm_head",
+        "graph_model",
+        "exchange_info_layer",
+        "fushion_layer",
+        "special_input_emb",
+        "llm_to_rel_layer",
+        "llm_to_ent_layer",
+        "fuse_llm_ent_layer",
+        "proj_rel_layer"
+    ]
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        # bnb_4bit_compute_dtype=torch.float32,
+        # llm_int8_threshold=6.0,
+        # llm_int8_has_fp16_weight=False,
+        llm_int8_skip_modules=custom_layers
+    )
     model: GNNLLM = GNNLLM.from_pretrained(
         cfg.model.llm_name,
         cache_dir=cfg.model.cache_dir,
         token=cfg.model.hf_token,
-        # quantization_config=bnb_config,
+        quantization_config=bnb_config,
         cfg=cfg,
     )
 
@@ -104,36 +111,33 @@ def build_model(
     model.config.use_cache = False  # Gradient checkpointing is used by default but not compatible with caching
 
     model.init_graph_tokenizer(tokenizer, num_new_tokens)
-    # model = prepare_model_for_kbit_training(
-    #     model,
-    #     gradient_checkpointing_kwargs={"use_reentrant": False},
-    # )
-    # lora_modules = find_all_linear_names(model, cfg)
+    model = prepare_model_for_kbit_training(
+        model,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
+    )
+    lora_modules = find_all_linear_names(model, cfg)
 
-    # peft_config = LoraConfig(
-    #     task_type=TaskType.CAUSAL_LM,
-    #     inference_mode=False,
-    #     r=8,
-    #     lora_alpha=8,
-    #     lora_dropout=0.1,
-    #     target_modules=lora_modules,
-    # )
+    peft_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        inference_mode=False,
+        r=8,
+        lora_alpha=8,
+        lora_dropout=0.1,
+        target_modules=lora_modules,
+    )
 
-    # peft_model = get_peft_model(model, peft_config)
-    # custom_layers = [
-    #     "graph_model",
-    #     "exchange_info_layer",
-    #     "fushion_layer",
-    #     "predict_layer",
-    #     "special_input_emb",
-    # ]
-    # set_requires_grad(peft_model, custom_layers, requires_grad=True)
+    peft_model = get_peft_model(model, peft_config)
+    set_requires_grad(peft_model, custom_layers, requires_grad=True)
+
+    # assert embed_tokens is not requires_grad
+    peft_model.base_model.model.model.embed_tokens.weight.requires_grad_(False)
+    peft_model.print_trainable_parameters()
 
     # model = Ultra(
     #     rel_model_cfg=cfg.model.relation_model,
     #     entity_model_cfg=cfg.model.entity_model,
     # )
-    return model
+    return peft_model
 
 
 def build_tokenizer_model(cfg: Config) -> tuple[AutoTokenizer, PeftModel]:

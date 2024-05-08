@@ -9,6 +9,7 @@ from transformers.modeling_outputs import (
 )
 
 from config.config import Config
+from src.model.layer import MLP
 from src.data.types import PretrainDatasetOutput, ModelInput
 from src.ultra.models import RelNBFNet, EntityNBFNet
 from src.model.gemma_gnn import GNNLLMModel, GNNLLMModelOutput
@@ -26,6 +27,13 @@ class GNNLLM(GemmaForCausalLM):
         self.model = GNNLLMModel(config, cfg=cfg)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        self.proj_rel_layer = MLP(
+            cfg.model.relation_model.hidden_dims[-1],
+            config.hidden_size,
+            config.hidden_size,
+            2,
+        )
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -50,7 +58,7 @@ class GNNLLM(GemmaForCausalLM):
         data: Optional[PretrainDatasetOutput] = None,
         embeds: Optional[torch.FloatTensor] = None,
     ) -> Union[CausalLMOutputWithPast, GNNLLMOutput]:
-        output_attentions, output_hidden_states, return_dict = self._forward_setup()
+        output_attentions, output_hidden_states, return_dict = self._forward_setup(output_attentions, output_hidden_states, return_dict)
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         if data is not None:
@@ -74,6 +82,7 @@ class GNNLLM(GemmaForCausalLM):
             )
 
             # Second: encode ent emb
+            # TODO to debug and rel_out.rel_emb shape is (1, num_rel, gnn_dim) need expand
             ent_input = ModelInput.ent_from_pretrain_output(
                 data, rel_emb=rel_out.rel_emb
             )
@@ -91,6 +100,9 @@ class GNNLLM(GemmaForCausalLM):
                 input_ids=ent_input.prompt,
                 model_input=ent_input,
             )
+
+            # project rel_emb from gnn_dim into hidden_dim
+            rel_out.rel_emb = self.proj_rel_layer(rel_out.rel_emb)
 
             return GNNLLMOutput(ent_emb=ent_out.ent_emb, rel_emb=rel_out.rel_emb)
 
@@ -137,7 +149,7 @@ class GNNLLM(GemmaForCausalLM):
             attentions=outputs.attentions,
         )
 
-    def _forward_setup(self):
+    def _forward_setup(self, output_attentions, output_hidden_states, return_dict):
         output_attentions = (
             output_attentions
             if output_attentions is not None

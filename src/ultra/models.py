@@ -75,11 +75,10 @@ class RelNBFNet(BaseNBFNet):
             )
             index = h_index.unsqueeze(-1).expand_as(query)
         else:
-            query = boundary
+            query = None
 
-        if (
-            boundary is None
-        ):  # 原本的做法是 query_rel 为1，其他全为0，现在使用 LLM 的输出作为 boundary
+        if boundary is None:
+            # 原本的做法是 query_rel 为1，其他全为0，现在使用 LLM 的输出作为 boundary
             batch_size = len(h_index)
             # initial (boundary) condition - initialize all node states as zeros
             boundary = torch.zeros(
@@ -90,7 +89,7 @@ class RelNBFNet(BaseNBFNet):
             boundary.scatter_add_(1, index.unsqueeze(1), query.unsqueeze(1))
 
         size = (data.num_nodes, data.num_nodes)
-        edge_weight = torch.ones(data.num_edges, device=h_index.device)
+        edge_weight = torch.ones(data.num_edges, device=boundary.device)
 
         hiddens = []
         edge_weights = []
@@ -114,11 +113,12 @@ class RelNBFNet(BaseNBFNet):
             edge_weights.append(edge_weight)
             layer_input = hidden
 
-        # original query (relation type) embeddings
-        node_query = query.unsqueeze(1).expand(
-            -1, data.num_nodes, -1
-        )  # (batch_size, num_nodes, input_dim)
-        if self.concat_hidden:
+        if query is not None and self.concat_hidden:
+            # original query (relation type) embeddings
+            node_query = query.unsqueeze(1).expand(
+                -1, data.num_nodes, -1
+            )  # (batch_size, num_nodes, input_dim)
+
             output = torch.cat(hiddens + [node_query], dim=-1)
             output = self.mlp(output)
         else:
@@ -174,69 +174,18 @@ class EntityNBFNet(BaseNBFNet):
         mlp.append(nn.Linear(feature_dim, 1))
         self.mlp = nn.Sequential(*mlp)
 
-    def bellmanford(self, data, h_index, r_index, separate_grad=False, boundary: Optional[torch.Tensor]=None):
-        if boundary is None:
-            batch_size = len(r_index)
-
-            # initialize queries (relation types of the given triples)
-            query = self.query[torch.arange(batch_size, device=r_index.device), r_index]
-            index = h_index.unsqueeze(-1).expand_as(query)
-
-            # initial (boundary) condition - initialize all node states as zeros
-            boundary = torch.zeros(
-                batch_size, data.num_nodes, self.dims[0], device=h_index.device
-            )
-        # by the scatter operation we put query (relation) embeddings as init features of source (index) nodes
-            boundary.scatter_add_(1, index.unsqueeze(1), query.unsqueeze(1))
-        else:
-            query = self.query
-
-        size = (data.num_nodes, data.num_nodes)
-        edge_weight = torch.ones(data.num_edges, device=h_index.device)
-
-        hiddens = []
-        edge_weights = []
-        layer_input = boundary
-
-        for layer in self.layers:
-
-            # for visualization
-            if separate_grad:
-                edge_weight = edge_weight.clone().requires_grad_()
-
-            # Bellman-Ford iteration, we send the original boundary condition in addition to the updated node states
-            hidden = layer(
-                layer_input,
-                query,  # only for cal batch_size
-                boundary,
-                data.edge_index,
-                data.edge_type,
-                size,
-                edge_weight,
-            )
-            if self.short_cut and hidden.shape == layer_input.shape:
-                # residual connection here
-                hidden = hidden + layer_input
-            hiddens.append(hidden)
-            edge_weights.append(edge_weight)
-            layer_input = hidden
-
-        # original query (relation type) embeddings
-        node_query = query.unsqueeze(1).expand(
-            -1, data.num_nodes, -1
-        )  # (batch_size, num_nodes, input_dim)
-        if self.concat_hidden:
-            output = torch.cat(hiddens + [node_query], dim=-1)
-        else:
-            output = torch.cat([hiddens[-1], node_query], dim=-1)
-
-        return {
-            "node_feature": output,
-            "edge_weights": edge_weights,
-        }
-
-    def bellmanford_layer(self, data, h_index, r_index, separate_grad=False, boundary: Optional[torch.Tensor]=None, layer_idx: int=-1):
-        assert layer_idx > 0, "layer_idx should be greater than 0 in ent-gnn bellmanford_layer."
+    def bellmanford_layer(
+        self,
+        data,
+        h_index,
+        r_index,
+        separate_grad=False,
+        boundary: Optional[torch.Tensor] = None,
+        layer_idx: int = -1,
+    ):
+        assert (
+            layer_idx >= 0
+        ), "layer_idx should be greater than 0 in ent-gnn bellmanford_layer."
 
         if boundary is None:
             batch_size = len(r_index)
@@ -249,7 +198,7 @@ class EntityNBFNet(BaseNBFNet):
             boundary = torch.zeros(
                 batch_size, data.num_nodes, self.dims[0], device=h_index.device
             )
-        # by the scatter operation we put query (relation) embeddings as init features of source (index) nodes
+            # by the scatter operation we put query (relation) embeddings as init features of source (index) nodes
             boundary.scatter_add_(1, index.unsqueeze(1), query.unsqueeze(1))
         else:
             query = self.query
@@ -262,8 +211,8 @@ class EntityNBFNet(BaseNBFNet):
             layer_input = boundary
             edge_weight = torch.ones(data.num_edges, device=h_index.device)
         else:
-            layer_input = self.hiddens[layer_idx-1]
-            edge_weight = self.edge_weights[layer_idx-1]
+            layer_input = self.hiddens[layer_idx - 1]
+            edge_weight = self.edge_weights[layer_idx - 1]
 
         layer = self.layers[layer_idx]
         # for visualization
@@ -286,13 +235,13 @@ class EntityNBFNet(BaseNBFNet):
 
         if layer_idx == len(self.layers) - 1:
             # original query (relation type) embeddings
-            node_query = query.unsqueeze(1).expand(
-                -1, data.num_nodes, -1
-            )
+            # node_query = query.unsqueeze(1).expand(
+            #     -1, data.num_nodes, -1
+            # )
             if self.concat_hidden:
-                output = torch.cat(self.hiddens + [node_query], dim=-1)
+                output = torch.cat(self.hiddens, dim=-1)
             else:
-                output = torch.cat([self.hiddens[-1], node_query], dim=-1)
+                output = hidden
 
             return {
                 "node_feature": output,
@@ -304,47 +253,20 @@ class EntityNBFNet(BaseNBFNet):
                 "edge_weights": edge_weight,
             }
 
-    """def forward(self, data, relation_representations, batch):
-        h_index, t_index, r_index = batch.unbind(-1)
+    def forward(
+        self,
+        data,
+        relation_representations,
+        batch,
+        boundary: Optional[torch.Tensor] = None,
+        layer_idx: int = -1,
+    ):
+        assert layer_idx >= 0, "layer_idx should be greater than 0 in ent-gnn model."
 
-        # initial query representations are those from the relation graph
-        self.query = relation_representations
-
-        # initialize relations in each NBFNet layer (with uinque projection internally)
-        for layer in self.layers:
-            layer.relation = relation_representations
-
-        if self.training:
-            # Edge dropout in the training mode
-            # here we want to remove immediate edges (head, relation, tail) from the edge_index and edge_types
-            # to make NBFNet iteration learn non-trivial paths
-            data = self.remove_easy_edges(data, h_index, t_index, r_index)
-
-        shape = h_index.shape
-        # turn all triples in a batch into a tail prediction mode
-        h_index, t_index, r_index = self.negative_sample_to_tail(
-            h_index, t_index, r_index, num_direct_rel=data.num_relations // 2
-        )
-        assert (h_index[:, [0]] == h_index).all()
-        assert (r_index[:, [0]] == r_index).all()
-
-        # message passing and updated node representations
-        output = self.bellmanford(
-            data, h_index[:, 0], r_index[:, 0]
-        )  # (num_nodes, batch_size, feature_dim）
-        feature = output["node_feature"]
-        index = t_index.unsqueeze(-1).expand(-1, -1, feature.shape[-1])
-        # extract representations of tail entities from the updated node states
-        feature = feature.gather(
-            1, index
-        )  # (batch_size, num_negative + 1, feature_dim)
-
-        # probability logit for each tail node in the batch
-        # (batch_size, num_negative + 1, dim) -> (batch_size, num_negative + 1)
-        score = self.mlp(feature).squeeze(-1)
-        return score.view(shape)"""
-    def forward(self, data, relation_representations, batch, boundary: Optional[torch.Tensor]=None, layer_idx: int=-1):
-        assert layer_idx > 0, "layer_idx should be greater than 0 in ent-gnn model."
+        # if layer_idx == 0:
+        #     self.boundary = boundary
+        # else:
+        #     boundary = self.boundary
 
         h_index, t_index, r_index = batch.unbind(-1)
 
@@ -371,9 +293,9 @@ class EntityNBFNet(BaseNBFNet):
         # assert (r_index[:, [0]] == r_index).all()
 
         # message passing and updated node representations
-        output = self.bellmanford(
-            data, h_index[:, 0], r_index[:, 0], boundary=boundary
-        )  # (num_nodes, batch_size, feature_dim）
+        # output = self.bellmanford(
+        #     data, h_index[:, 0], r_index[:, 0], boundary=boundary
+        # )  # (num_nodes, batch_size, feature_dim）
         output = self.bellmanford_layer(
             data, h_index[:, 0], r_index[:, 0], boundary=boundary, layer_idx=layer_idx
         )  # (num_nodes, batch_size, feature_dim）

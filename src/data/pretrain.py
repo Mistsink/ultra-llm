@@ -70,7 +70,7 @@ class PretrainDataset(Dataset):
             strict=self.cfg.task.strict_negative,
             limit_nodes=subg.n_id,
         )
-        # FIXME 将 mask_triples 中的 n_id 转成新的子图中的 n_id, 重新标记 [暂时不写]
+        # TODO FIXME 将 mask_triples 中的 n_id 转成新的子图中的 n_id, 重新标记 [暂时不写]
 
         # 随机 mask 一下文本信息或者结构信息 [暂时不写]
 
@@ -88,7 +88,7 @@ class PretrainDataset(Dataset):
         #   a. 各子图单独一个 prompt [暂时不写]
         #   b. 子图 batch 成一个 g，直接 concat 三元组即可，共享同一个 prompt
         relg_prompt, rel_ids = self.create_prompt(relg, "relation")
-        entg_prompt, _ = self.create_prompt(subg, "entity")
+        entg_prompt, ent_ids = self.create_prompt(subg, "entity")
         prompt_ids = self.tokenize([relg_prompt, entg_prompt])
 
         # 记录各 mask 的节点、负样本在 g、prompt 中的位置，方便在 model encode 后收集特征
@@ -99,7 +99,7 @@ class PretrainDataset(Dataset):
             rel_end_idx,
             ent_begin_idx,
             ent_end_idx,
-        ) = self.record_node_idx_range(rel_ids, prompt_ids, mask_triples)
+        ) = self.record_node_idx_range(rel_ids, prompt_ids, mask_triples, ent_ids)
 
         return PretrainDatasetItemOutput(
             mask_triples=mask_triples,
@@ -161,9 +161,10 @@ class PretrainDataset(Dataset):
         # edge_index 为 2 x n 的 tensor
         edge_index = entities.view(2, -1)
 
+        # FIXME 暂时取 -1, 50, 50
         loader = LinkNeighborLoader(
             data=self.data,
-            num_neighbors=[-1, -1],
+            num_neighbors=[-1, 50],
             edge_label_index=edge_index,
             subgraph_type="directional",
             disjoint=False,  # 待测试
@@ -263,7 +264,11 @@ Next, I will provide an actual description of a KG:
         return input_ids
 
     def record_node_idx_range(
-        self, rel_ids: list[int], prompt_ids: torch.Tensor, mask_triples: torch.Tensor
+        self,
+        rel_ids: list[int],
+        prompt_ids: torch.Tensor,
+        mask_triples: torch.Tensor,
+        ent_ids: list[int],
     ):
         """
         rel_ids: 按 prompt 中出现顺序的 rel-id
@@ -283,54 +288,16 @@ Next, I will provide an actual description of a KG:
             id_to_access = 3
             print(f"ID {id_to_access} 对应的值为: {sparse_tensor[id_to_access][0]}")
         """
-        pass
         # for rel node range
         tokens = self.tokenizer.convert_ids_to_tokens(prompt_ids[0])
-        ranges: list[tuple[int, int]] = []
-
-        special_token_const_num = 4
-        _g_begin_num, g_begin_idx, g_end_idx = 0, 0, 0
-        last_b_idx = -1
         prefixs = self.tokenizer.tokenize(" [RELATION")
-        for i, token in enumerate(tokens):
-            # 先找到 <graph-begin>
-            if (
-                token != SpecialToken.G_BEGIN.value
-                and _g_begin_num < special_token_const_num
-            ):
-                continue
-            if token == SpecialToken.G_BEGIN.value:
-                _g_begin_num += 1
-                if _g_begin_num == special_token_const_num:
-                    g_begin_idx = i
-                continue
-            if (
-                token == SpecialToken.G_END.value
-                and _g_begin_num == special_token_const_num
-            ):
-                g_end_idx = i
-                if last_b_idx != -1:
-                    ranges.append((last_b_idx, i - 1))
-                break
-
-            # ' [RELATION 123]' -> _[, RELATION, _, 1, 2, 3, ]
-            if token == prefixs[0] and tokens[i + 1] == prefixs[1]:
-                if last_b_idx == -1:
-                    last_b_idx = i
-                else:
-                    ranges.append((last_b_idx, i - 1))
-                    last_b_idx = i
-        indices = [rel_ids, [0] * len(rel_ids)]
-        rel_ranges = torch.sparse_coo_tensor(
-            indices,
-            ranges,
-        )
-        rel_begin_idx = g_begin_idx
-        rel_end_idx = g_end_idx
+        rel_ranges, rel_begin_idx, rel_end_idx = self.ranges_from_ids(tokens, prefixs, rel_ids)
 
         # for ent node range
         tokens = self.tokenizer.convert_ids_to_tokens(prompt_ids[1])
-        ranges = []
+        prefixs = self.tokenizer.tokenize(" [ENTITY")
+        ent_ranges, ent_begin_idx, ent_end_idx = self.ranges_from_ids(tokens, prefixs, ent_ids)
+        """ranges = []
         entities = mask_triples[:, :, :2].unique().cpu().tolist()
         ent_desc_prefixs = [" [ENTITY"]
         ent_desc_prefixs.extend([f" [ENTITY {i}]" for i in entities])
@@ -361,7 +328,7 @@ Next, I will provide an actual description of a KG:
             ranges,
         )
         ent_begin_idx = g_begin_idx
-        ent_end_idx = g_end_idx
+        ent_end_idx = g_end_idx"""
 
         return (
             rel_ranges,
@@ -371,6 +338,50 @@ Next, I will provide an actual description of a KG:
             ent_begin_idx,
             ent_end_idx,
         )
+
+    def ranges_from_ids(self, tokens: list[str], prefixs: list[str], ids: list[int]):
+        ranges: list[tuple[int, int]] = []
+
+        special_token_const_num = 4
+        _g_begin_num, g_begin_idx, g_end_idx = 0, 0, 0
+        last_b_idx = -1
+        for i, token in enumerate(tokens):
+            # 先找到 <graph-begin>
+            if (
+                token != SpecialToken.G_BEGIN.value
+                and _g_begin_num < special_token_const_num
+            ):
+                continue
+            if token == SpecialToken.G_BEGIN.value:
+                _g_begin_num += 1
+                if _g_begin_num == special_token_const_num:
+                    g_begin_idx = i
+                continue
+            if (
+                token == SpecialToken.G_END.value
+                and _g_begin_num == special_token_const_num
+            ):
+                g_end_idx = i
+                if last_b_idx != -1:
+                    ranges.append((last_b_idx, i - 1))
+                break
+
+            # ' [RELATION 123]' -> _[, RELATION, _, 1, 2, 3, ]
+            if token == prefixs[0] and tokens[i + 1] == prefixs[1]:
+                if last_b_idx == -1:
+                    last_b_idx = i
+                else:
+                    ranges.append((last_b_idx, i - 1))
+                    last_b_idx = i
+        indices = [ids, [0] * len(ids)]
+        rel_ranges = torch.sparse_coo_tensor(
+            indices,
+            ranges,
+        )
+        rel_begin_idx = g_begin_idx
+        rel_end_idx = g_end_idx
+
+        return rel_ranges, rel_begin_idx, rel_end_idx
 
 
 def find_subsequence_in_list(

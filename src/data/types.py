@@ -5,6 +5,7 @@ from torch_geometric.data import Data, Batch
 
 from src.data.graph_text_store import TextData
 
+
 class CustomData(Data):
     target_edge_index: torch.Tensor
     target_edge_type: torch.Tensor
@@ -14,16 +15,17 @@ class CustomData(Data):
     relation_graph: Optional[Data]
     num_relations: int
 
+
 class CustomSubData(CustomData):
     n_id: torch.Tensor
     e_id: torch.Tensor
     edge_label_index: torch.Tensor
 
+
 class CustomSubDataWithSuperNode(CustomSubData):
     super_node_id: int
     super_edge_type: torch.Tensor
     begin_super_edge_index: int
-
 
 
 @dataclass
@@ -65,6 +67,22 @@ class PretrainDatasetOutput:
     def __len__(self):
         return self.data.num_graphs
 
+    def to(self, device):
+        self.data = self.data.to(device)
+        self.data_rel = self.data_rel.to(device)
+        self.ent_prompt = self.ent_prompt.to(device)
+        self.rel_prompt = self.rel_prompt.to(device)
+
+        self.rel_begin_idx = self.rel_begin_idx.to(device)
+        self.rel_end_idx = self.rel_end_idx.to(device)
+        self.rel_ranges = [i.to(device) for i in self.rel_ranges]
+
+        self.ent_begin_idx = self.ent_begin_idx.to(device)
+        self.ent_end_idx = self.ent_end_idx.to(device)
+        self.ent_ranges = [i.to(device) for i in self.ent_ranges]
+
+        return self
+
 
 @dataclass
 class ModelInput:
@@ -79,12 +97,30 @@ class ModelInput:
 
     def __len__(self):
         return self.data.num_graphs
-    
+
     @staticmethod
     def rel_from_pretrain_output(data: PretrainDatasetOutput):
-        return ModelInput(data.data_rel, data.mask_triples, data.rel_prompt, data.rel_begin_idx, data.rel_end_idx, data.rel_ranges, is_ent=False)
-    
+        return ModelInput(
+            data.data_rel,
+            data.mask_triples,
+            data.rel_prompt,
+            data.rel_begin_idx,
+            data.rel_end_idx,
+            data.rel_ranges,
+            is_ent=False,
+        )
+
     @staticmethod
-    def ent_from_pretrain_output(data: PretrainDatasetOutput, rel_emb: Optional[torch.Tensor] = None):
-        return ModelInput(data.data, data.mask_triples, data.ent_prompt, data.ent_begin_idx, data.ent_end_idx, data.ent_ranges, is_ent=True, rel_emb=rel_emb)
-        
+    def ent_from_pretrain_output(
+        data: PretrainDatasetOutput, rel_emb: Optional[torch.Tensor] = None
+    ):
+        return ModelInput(
+            data.data,
+            data.mask_triples,
+            data.ent_prompt,
+            data.ent_begin_idx,
+            data.ent_end_idx,
+            data.ent_ranges,
+            is_ent=True,
+            rel_emb=rel_emb,
+        )

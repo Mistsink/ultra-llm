@@ -64,8 +64,16 @@ class GeneralizedRelationalConv(MessagePassing):
 
 
     def forward(self, input, query, boundary, edge_index, edge_type, size, edge_weight=None, batch_size=None):
+        if torch.isnan(self.layer_norm.weight).any():
+            print("layer_norm has nan value")
+            self.layer_norm = nn.LayerNorm(self.output_dim, device=boundary.device)
+
+
         if batch_size is None:
-            batch_size = len(query)
+            if query is not None:
+                batch_size = len(query)
+            else:
+                batch_size = 1
 
         if self.dependent:
             # layer-specific relation features as a projection of input "query" (relation) embeddings
@@ -105,7 +113,7 @@ class GeneralizedRelationalConv(MessagePassing):
         size = self._check_input(edge_index, size)
         coll_dict = self._collect(self._fused_user_args, edge_index, size, kwargs)
 
-        msg_aggr_kwargs = self.inspector.distribute("message_and_aggregate", coll_dict)
+        msg_aggr_kwargs = self.inspector.collect_param_data("message_and_aggregate", coll_dict)
         for hook in self._message_and_aggregate_forward_pre_hooks.values():
             res = hook(self, (edge_index, msg_aggr_kwargs))
             if res is not None:
@@ -116,7 +124,7 @@ class GeneralizedRelationalConv(MessagePassing):
             if res is not None:
                 out = res
 
-        update_kwargs = self.inspector.distribute("update", coll_dict)
+        update_kwargs = self.inspector.collect_param_data("update", coll_dict)
         out = self.update(out, **update_kwargs)
 
         for hook in self._propagate_forward_hooks.values():
