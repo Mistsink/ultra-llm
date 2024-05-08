@@ -291,12 +291,16 @@ Next, I will provide an actual description of a KG:
         # for rel node range
         tokens = self.tokenizer.convert_ids_to_tokens(prompt_ids[0])
         prefixs = self.tokenizer.tokenize(" [RELATION")
-        rel_ranges, rel_begin_idx, rel_end_idx = self.ranges_from_ids(tokens, prefixs, rel_ids)
+        rel_ranges, rel_begin_idx, rel_end_idx = self.ranges_from_ids(
+            tokens, prefixs, rel_ids
+        )
 
         # for ent node range
         tokens = self.tokenizer.convert_ids_to_tokens(prompt_ids[1])
         prefixs = self.tokenizer.tokenize(" [ENTITY")
-        ent_ranges, ent_begin_idx, ent_end_idx = self.ranges_from_ids(tokens, prefixs, ent_ids)
+        ent_ranges, ent_begin_idx, ent_end_idx = self.ranges_from_ids(
+            tokens, prefixs, ent_ids
+        )
         """ranges = []
         entities = mask_triples[:, :, :2].unique().cpu().tolist()
         ent_desc_prefixs = [" [ENTITY"]
@@ -382,24 +386,3 @@ Next, I will provide an actual description of a KG:
         rel_end_idx = g_end_idx
 
         return rel_ranges, rel_begin_idx, rel_end_idx
-
-
-def find_subsequence_in_list(
-    lst: list[str], subseq: list[str], occurrence=1, start_index=0
-):
-    subseq_length = len(subseq)  # 子序列的长度
-    if start_index < 0 or start_index >= len(lst):
-        return -1  # 如果起始索引无效，直接返回 -1
-
-    max_index = len(lst) - subseq_length + 1  # 可以检查子序列的最大起始索引
-    count = 0  # 用于计数找到的子序列次数
-
-    # 从指定的起始索引开始遍历
-    for i in range(start_index, max_index):
-        # 使用切片检查从当前索引开始的子列表是否与目标子序列匹配
-        if lst[i : i + subseq_length] == subseq:
-            count += 1
-            if count == occurrence:
-                return i  # 找到第 `occurrence` 次出现，返回子序列的起始索引
-
-    return -1  # 如果列表中没有找到指定次数的子序列，返回 -1

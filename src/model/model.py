@@ -82,7 +82,6 @@ class GNNLLM(GemmaForCausalLM):
             )
 
             # Second: encode ent emb
-            # TODO to debug and rel_out.rel_emb shape is (1, num_rel, gnn_dim) need expand
             ent_input = ModelInput.ent_from_pretrain_output(
                 data, rel_emb=rel_out.rel_emb
             )

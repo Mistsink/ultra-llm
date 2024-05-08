@@ -19,8 +19,9 @@ from transformers.modeling_utils import unwrap_model
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
 
 from config.config import Config
+from src.data.instruction import LPInstrucDataset
 from src.model.model import GNNLLMOutput
-from src.data.types import PretrainDatasetOutput
+from src.data.types import InstrucInput, PretrainDatasetOutput
 from src.trainer.dataloader import DataloaderMixin
 from src.trainer.metric import metric_fn
 
@@ -73,11 +74,19 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
 
         # >>> decode <<<
         # TODO create data for instruct tuning
-        outputs: CausalLMOutputWithPast = model(input_ids=None, embeds=None)
+        # 1. create dataloader for instruct tuning
+        dataloader: list[InstrucInput] = self.get_instruct_dataloader(inputs, outputs)
+        
+        # 2. forward
+        losses = []
+        for batch in dataloader:
+            outputs: CausalLMOutputWithPast = model(input_ids=batch.input_ids, embeds=batch.embs, labels=batch.label_ids)
 
+            losses.append(outputs.loss)
+
+        loss = torch.stack(losses).mean()
         
-        loss = outputs.loss
-        
+        return loss
         return (loss, outputs) if return_outputs else loss
         if self.label_smoother is not None:
             unwrapped_model = unwrap_model(model)

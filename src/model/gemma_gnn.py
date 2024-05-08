@@ -218,7 +218,6 @@ class GNNLLMModel(GemmaModel):
         将 info token 的 emb 替换为可学习的 embeds 中的 emb
         :return: replaced inputs_embeds
         """
-        pass
         for i in range(input_ids.size(0)):
             _input_ids = input_ids[i]
             _inputs_embed = inputs_embeds[i]

@@ -3,6 +3,9 @@ from typing import TYPE_CHECKING, Optional
 from torch.utils.data import DataLoader, Dataset
 from transformers import Trainer
 
+from src.data.instruction import LPInstrucDataset
+from src.model.model import GNNLLMOutput
+from src.data.types import PretrainDatasetOutput
 from src.data.pretrain import PretrainDataset
 
 if TYPE_CHECKING:
@@ -59,3 +62,16 @@ class DataloaderMixin(BaseClass):
 
         # We use the same batch_size as for eval.
         return self.accelerator.prepare(DataLoader(test_dataset, **dataloader_params))
+    
+    def get_instruct_dataloader(self, inputs: PretrainDatasetOutput, outputs: GNNLLMOutput) -> DataLoader:
+        dataset = LPInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer)
+
+        dataloader_params = {
+            "batch_size": self.args.eval_batch_size,
+            "collate_fn": LPInstrucDataset.collate_fn,
+            "num_workers": 0,
+            "pin_memory": self.args.dataloader_pin_memory,
+        }
+
+        # We use the same batch_size as for eval.
+        return self.accelerator.prepare(DataLoader(dataset, **dataloader_params))

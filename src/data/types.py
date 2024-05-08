@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 import torch
 from torch_geometric.data import Data, Batch
 
@@ -124,3 +124,41 @@ class ModelInput:
             is_ent=True,
             rel_emb=rel_emb,
         )
+
+
+@dataclass
+class InstrucInput:
+    triple: Union[torch.Tensor, list[int], tuple[int, int, int]]
+    input_ids: torch.Tensor
+    label_ids: torch.Tensor
+    embs: list[torch.Tensor]  # [ent_embs..., rel_emb]
+    g_emb: Optional[torch.Tensor] = None
+
+    def to(self, device):
+        self.input_ids = self.input_ids.to(device)
+        self.label_ids = self.label_ids.to(device)
+        self.embs = [i.to(device) for i in self.embs]
+        self.g_emb = self.g_emb.to(device)
+
+        return self
+
+
+def find_subsequence_in_list(
+    lst: list[str], subseq: list[str], occurrence=1, start_index=0
+):
+    subseq_length = len(subseq)  # 子序列的长度
+    if start_index < 0 or start_index >= len(lst):
+        return -1  # 如果起始索引无效，直接返回 -1
+
+    max_index = len(lst) - subseq_length + 1  # 可以检查子序列的最大起始索引
+    count = 0  # 用于计数找到的子序列次数
+
+    # 从指定的起始索引开始遍历
+    for i in range(start_index, max_index):
+        # 使用切片检查从当前索引开始的子列表是否与目标子序列匹配
+        if lst[i : i + subseq_length] == subseq:
+            count += 1
+            if count == occurrence:
+                return i  # 找到第 `occurrence` 次出现，返回子序列的起始索引
+
+    return -1  # 如果列表中没有找到指定次数的子序列，返回 -1
