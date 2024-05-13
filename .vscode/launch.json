@@ -10,9 +10,21 @@
             "request": "launch",
             "program": "${workspaceFolder}/script/demo_pretrain.py",
             "env": {
-                "CUDA_VISIBLE_DEVICES": "4"
+                "CUDA_VISIBLE_DEVICES": "2,3"
             },
             "justMyCode": false
+        },
+        {
+            "name": "Accelerate",
+            "type": "python",
+            "request": "launch",
+            "module": "accelerate.commands.launch",
+            "args": [
+                "--config_file", "config/ac.yaml",
+                "${workspaceFolder}/script/demo_pretrain.py"
+            ],
+            "justMyCode": false,
+            "console": "integratedTerminal"
         },
         {
             // debug for any file

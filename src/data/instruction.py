@@ -15,6 +15,7 @@ if __name__ == "__main__":
 
 import torch
 from torch.utils.data import Dataset
+from torch.nn.utils.rnn import pad_sequence
 from transformers import GemmaTokenizer
 
 from src.data.types import InstrucInput, find_subsequence_in_list
@@ -31,7 +32,7 @@ class LPInstrucDataset(Dataset):
         max_length=512,
     ):
         super().__init__()
-        self.mask_triples = mask_triples
+        self.mask_triples = mask_triples.squeeze(0)
         self.ent_emb = ent_emb.squeeze(0)
         self.rel_emb = rel_emb.squeeze(0)
         self.tokenizer = tokenizer
@@ -39,62 +40,73 @@ class LPInstrucDataset(Dataset):
 
     def __len__(self):
         return len(self.mask_triples)
-    
+
     @staticmethod
     def collate_fn(batch: list[InstrucInput]) -> InstrucInput:
         triples = torch.stack([i.triple for i in batch], dim=0)
         input_ids = torch.stack([i.input_ids for i in batch], dim=0)
         label_ids = torch.stack([i.label_ids for i in batch], dim=0)
-        embs = torch.stack([i.embs for i in batch], dim=0)
+        embs = pad_sequence([i.embs for i in batch], batch_first=True, padding_value=0)
 
-        return InstrucInput(triple=triples, input_ids=input_ids, label_ids=label_ids, embs=embs)
+        return InstrucInput(
+            triple=triples, input_ids=input_ids, label_ids=label_ids, embs=embs
+        )
+
+    @staticmethod
+    def get_labels(
+        triples: torch.Tensor, tokenizer: GemmaTokenizer, max_length: int = 512
+    ):
+        h, t, r = triples[0].tolist()
+        pred_tail = torch.all(triples[:, 0] == triples[0, 0])
+
+        negs = triples[1:]
+
+        if pred_tail:
+            neg_ents = negs[:, 1].view(-1).unique().tolist()
+        else:
+            neg_ents = negs[:, 0].view(-1).unique().tolist()
+
+        # 生成 prompt
+        prompt, node_ids = LPInstrucDataset._generate_prompt(
+            h, r, t, neg_ents, pred_tail=pred_tail
+        )
+
+        # tokenization & labeling
+        input_ids, labels = LPInstrucDataset.tokenize(
+            prompt, len(neg_ents) + 3, tokenizer, max_length=max_length
+        )
+
+        input_ids, labels = input_ids.squeeze(0), labels.squeeze(0)
+
+        return input_ids, labels
 
     def __getitem__(self, idx) -> InstrucInput:
         triples = self.mask_triples[idx]  # num_neg+1 x 3
-        h, r, t = triples[0].tolist()
+        h, t, r = triples[0].tolist()
+        pred_tail = torch.all(triples[:, 0] == triples[0, 0])
 
-        # TODO debug 查清楚 前面多少是 t_negs
-        num_negs = len(triples[1:])
-        t_negs = triples[1 : num_negs // 2 + 1]
-        h_negs = triples[num_negs // 2 + 1 :]
+        negs = triples[1:]
 
-        t_neg_ents = t_negs[:, 1].view(-1).unique().tolist()
-        h_neg_ents = h_negs[:, 0].view(-1).unique().tolist()
+        if pred_tail:
+            neg_ents = negs[:, 1].view(-1).unique().tolist()
+        else:
+            neg_ents = negs[:, 0].view(-1).unique().tolist()
 
         # 生成 prompt
         r_emb = self.rel_emb[r].unsqueeze(0)
-        pred_t_prompt, node_ids = self._generate_prompt(
-            h, r, t, t_neg_ents, pred_tail=True
-        )
+        prompt, node_ids = self._generate_prompt(h, r, t, neg_ents, pred_tail=pred_tail)
         node_embs = self.ent_emb[node_ids]
-        node_embs = torch.cat([node_embs, r_emb], dim=0).unsqueeze(
-            0
-        )  # 1 x num_nodes+1 x dim
-        pred_h_prompt, node_ids = self._generate_prompt(
-            h, r, t, h_neg_ents, pred_tail=False
-        )
-        _node_embs = self.ent_emb[node_ids]
-        _node_embs = torch.cat([_node_embs, r_emb], dim=0).unsqueeze(
-            0
-        )  # 1 x num_nodes+1 x dim
-        node_embs = torch.cat([node_embs, _node_embs], dim=0).unsqueeze(
-            0
-        )  # 1 x 2 x num_nodes+1 x dim
+        node_embs = torch.cat([node_embs, r_emb], dim=0)  # num_nodes+1 x dim
 
         # tokenization & labeling
-        pred_t_input_ids, pred_t_labels = self.tokenize(
-            pred_t_prompt, len(t_neg_ents) + 3
-        )
-        pred_h_input_ids, pred_h_labels = self.tokenize(
-            pred_h_prompt, len(h_neg_ents) + 3
+        input_ids, labels = self.tokenize(
+            prompt,
+            len(neg_ents) + 3,
+            tokenizer=self.tokenizer,
+            max_length=self.max_length,
         )
 
-        input_ids = torch.cat(
-            [pred_t_input_ids.unsqueeze(0), pred_h_input_ids.unsqueeze(0)], dim=0
-        )
-        labels = torch.cat(
-            [pred_t_labels.unsqueeze(0), pred_h_labels.unsqueeze(0)], dim=0
-        )
+        input_ids, labels = input_ids.squeeze(0), labels.squeeze(0)
 
         return InstrucInput(
             triple=torch.tensor((h, r, t)),
@@ -103,8 +115,9 @@ class LPInstrucDataset(Dataset):
             embs=node_embs,
         )
 
+    @staticmethod
     def _generate_prompt(
-        self, h, r, t, neg_ents: list[int], pred_tail=True
+        h, r, t, neg_ents: list[int], pred_tail=True
     ) -> tuple[str, list[int]]:
         """
                 Template:
@@ -129,9 +142,11 @@ Following [ENTITY 1] is its embedding information. Please complete the triplet t
 Below is the embedding information for all candidate tail entities: """
         if pred_tail:
             ents = neg_ents + [t]
+            exist_ent = h
             suffix = f"We know the embedding information for a missing triplet's head entity: [ENTITY {h}] {SpecialToken.INFO_NODE.value}, and the embedding information for its relation: [RELATION {r}] {SpecialToken.INFO_NODE.value}. The missing tail entity is: [ENTITY {t}]."
         else:
             ents = neg_ents + [h]
+            exist_ent = t
             suffix = f"We know the embedding information for a missing triplet's tail entity: [ENTITY {t}] {SpecialToken.INFO_NODE.value}, and the embedding information for its relation: [RELATION {r}] {SpecialToken.INFO_NODE.value}. The missing head entity is: [ENTITY {h}]."
 
         ents_str = f" {SpecialToken.INFO_NODE.value} ".join(
@@ -141,31 +156,32 @@ Below is the embedding information for all candidate tail entities: """
 
         prompt = temp + " " + ents_str + " . " + suffix
 
-        return prompt, ents
+        return prompt, ents + [exist_ent]
 
+    @staticmethod
     def tokenize(
-        self, prompt: str, num_info_nodes: int
+        prompt: str, num_info_nodes: int, tokenizer: GemmaTokenizer, max_length: int
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        input_ids = self.tokenizer(
+        input_ids = tokenizer(
             prompt,
             return_tensors="pt",
-            max_length=self.max_length,
+            max_length=max_length,
             padding="max_length",
             truncation=True,
         )["input_ids"][0]
         # 初始化 label: 全为 -100
         labels = torch.full_like(input_ids, -100)
 
-        tokens = self.tokenizer.convert_ids_to_tokens(input_ids)
+        tokens = tokenizer.convert_ids_to_tokens(input_ids)
 
-        info_node_tokens = self.tokenizer.tokenize(SpecialToken.INFO_NODE.value)
+        info_node_tokens = tokenizer.tokenize(SpecialToken.INFO_NODE.value)
         last_info_node_idx = find_subsequence_in_list(
             tokens, info_node_tokens, num_info_nodes
         )
         assert (
             last_info_node_idx != -1
         ), "Cannot find enough info node tokens in the tokenized prompt."
-        label_tokens_prefix = self.tokenizer.tokenize(" [ENTITY")
+        label_tokens_prefix = tokenizer.tokenize(" [ENTITY")
         label_idx = find_subsequence_in_list(
             tokens, label_tokens_prefix, start_index=last_info_node_idx
         )

@@ -44,6 +44,10 @@ class TaskConfig:
     adversarial_temperature: float = field(default=1.0)
     metric: List[str] = field(default_factory=lambda: ["loss"])
     num_negative: int = field(default=50)
+    instruct_len: int = field(default=512)
+    prompt_len: int = field(default=1024 * 8)
+    num_mask: int = field(default=64)
+    num_neighbors: list[int] = field(default_factory=lambda: [-1, 50])
 
 
 @dataclass
@@ -53,19 +57,31 @@ class OptimizerConfig:
 
 @dataclass
 class TrainConfig(TrainingArguments):
+    # rewrite inner default config
+    per_device_train_batch_size: Optional[int] = field(default=None)
+
     output_dir: str = field(default="output")
     batch_size: int = field(default=8)
+    instruct_batch_size: int = field(default=1)
     batch_per_epoch: int = field(default=1000)
 
     log_interval: int = field(default=100)
-    num_epoch: int = field(default=10)
-    fast_test: int = field(default=0)
+    num_train_epochs: int = field(default=10)
+    fast_test: int = field(default=-1)
+
+    evaluation_strategy: str = field(default="epoch")
+    save_strategy: str = field(default="epoch") # steps / epoch
+    save_steps: int = field(default=1000)
+    metric_for_best_model: Optional[str] = field(
+        default=None, metadata={"help": "The metric to use to compare two different models."}
+    )
+    greater_is_better: Optional[bool] = field(
+        default=None, metadata={"help": "Whether the `metric_for_best_model` should be maximized or not."}
+    )
 
 
 @dataclass
 class Config:
-    output_dir: str = field(default="output")
-    seed: int = field(default=42)
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     task: TaskConfig = field(default_factory=TaskConfig)

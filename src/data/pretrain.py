@@ -22,6 +22,7 @@ class PretrainDataset(Dataset):
         self.data = data
         self.tokenizer = tokenizer
         self.cfg = cfg
+        self.prompt_len = cfg.task.prompt_len
 
     def __len__(self):
         return self.cfg.train.batch_per_epoch * self.cfg.train.batch_size
@@ -47,8 +48,8 @@ class PretrainDataset(Dataset):
         subg = self.sample_from_edge_index(entities)
 
         # 采样子图中要预测的 triples，以及对应的负样本
-        # TODO cfg task num_mask
-        edge_mask = torch.randperm(subg.target_edge_index.shape[1])[:3]
+        # cfg task num_mask
+        edge_mask = torch.randperm(subg.target_edge_index.shape[1])[:self.cfg.task.num_mask]
         # mask_triples: tris x 3
         mask_triples = (
             torch.cat(
@@ -70,9 +71,13 @@ class PretrainDataset(Dataset):
             strict=self.cfg.task.strict_negative,
             limit_nodes=subg.n_id,
         )
-        # TODO FIXME 将 mask_triples 中的 n_id 转成新的子图中的 n_id, 重新标记 [暂时不写]
+        # 将 mask_triples 中的 n_id 转成新的子图中的 n_id, 重新标记 [暂时不写]
+        origin_id_to_new_id = {
+            ori_id.item(): idx for idx, ori_id in enumerate(subg.n_id)
+        }
+        mask_triples[:, :, :2] = mask_triples[:, :, :2].apply_(lambda x: origin_id_to_new_id[x])
 
-        # 随机 mask 一下文本信息或者结构信息 [暂时不写]
+        # TODO FIXME 随机 mask 一下文本信息或者结构信息 [暂时不写]
 
         # 创建 super_node, 并创建一条特殊的 edge_type
         subg = self.insert_super_node(subg)
@@ -99,6 +104,7 @@ class PretrainDataset(Dataset):
             rel_end_idx,
             ent_begin_idx,
             ent_end_idx,
+            prompt_ids
         ) = self.record_node_idx_range(rel_ids, prompt_ids, mask_triples, ent_ids)
 
         return PretrainDatasetItemOutput(
@@ -131,6 +137,16 @@ class PretrainDataset(Dataset):
         ent_end_idx = torch.tensor([i.ent_end_idx for i in batch])
         ent_ranges = [i.ent_ranges for i in batch]
 
+        labels = []
+        for i in batch:
+            if i._labels is not None:
+                labels.append(i._labels)
+
+        if len(labels) == 0:
+            labels = None
+        else:
+            labels = torch.stack(labels)
+
         return PretrainDatasetOutput(
             mask_triples=mask_triples,
             data=data,
@@ -143,6 +159,7 @@ class PretrainDataset(Dataset):
             ent_begin_idx=ent_begin_idx,
             ent_end_idx=ent_end_idx,
             ent_ranges=ent_ranges,
+            _labels=labels
         )
 
     def sample_from_edge_index(self, entities: torch.Tensor) -> CustomSubData:
@@ -161,19 +178,35 @@ class PretrainDataset(Dataset):
         # edge_index 为 2 x n 的 tensor
         edge_index = entities.view(2, -1)
 
-        # FIXME 暂时取 -1, 50, 50
         loader = LinkNeighborLoader(
             data=self.data,
-            num_neighbors=[-1, 50],
+            num_neighbors=self.cfg.task.num_neighbors,
             edge_label_index=edge_index,
             subgraph_type="directional",
-            disjoint=False,  # 待测试
+            disjoint=False,  # TODO 待测试
             neg_sampling=negative_sampler,
             batch_size=edge_index.shape[1],
         )
 
         # batch size 设为 edge_index.shape[1]，即仅需要一次 iter 即可采样完所有 edge_index
         sub_g: CustomSubData = next(iter(loader))
+
+        # sub_g.n_id 前面几个都是出发点，所以 label 大多都是 0, 1...，最好需要打乱这种偏好
+        num_nodes = sub_g.n_id.size(0)
+        permuted_indices = torch.randperm(num_nodes, device=sub_g.n_id.device)
+        shuffled_n_id = sub_g.n_id[permuted_indices]
+
+        old_idx_oriid_map = {
+            idx: ori_id for idx, ori_id in enumerate(sub_g.n_id.tolist())
+        }
+        new_oriid_idx_map = {
+            ori_id: idx for idx, ori_id in enumerate(shuffled_n_id.tolist())
+        }
+        def _replace(x):
+            return new_oriid_idx_map[old_idx_oriid_map[x]]
+
+        sub_g.edge_index = sub_g.edge_index.apply_(_replace)
+        sub_g.n_id = shuffled_n_id
 
         # 过滤掉 逆向 的 edge
         target_index = sub_g.e_id[sub_g.e_id < sub_g.target_edge_type.shape[0]]
@@ -232,9 +265,9 @@ Next, I will provide an actual description of a KG:
         if mode == "entity":
             descs = self.data.text_data.ent_desc
             # entity id 不会因为 构建逆向边 而增加
-            # FIXME 这里应该使用 子图中的id写入 prompt，而不是全图的id
-            for i in g.n_id.cpu().tolist():
-                items.append((f"[ENTITY {i}] {descs[i][0]}", i))
+            # 这里使用 子图中的id写入 prompt，而不是全图的id
+            for new_id, i in enumerate(g.n_id.cpu().tolist()):
+                items.append((f"[ENTITY {new_id}] {descs[i][0]}", new_id))
         else:
             descs = self.data.text_data.rel_desc
             # relation id 会因为 构建逆向边 而增加 2 倍
@@ -256,7 +289,7 @@ Next, I will provide an actual description of a KG:
             texts,
             return_tensors="pt",
             padding="max_length",
-            max_length=1024 * 8,  #  Gemma supports up to 8k tokens
+            max_length=self.prompt_len,  #  Gemma supports up to 8k tokens
             truncation=truncate,
         )["input_ids"]
 
@@ -289,6 +322,8 @@ Next, I will provide an actual description of a KG:
             print(f"ID {id_to_access} 对应的值为: {sparse_tensor[id_to_access][0]}")
         """
         # for rel node range
+        g_end_id = self.tokenizer(SpecialToken.G_END.value)['input_ids'][1]
+        prompt_ids[:, -1] = g_end_id
         tokens = self.tokenizer.convert_ids_to_tokens(prompt_ids[0])
         prefixs = self.tokenizer.tokenize(" [RELATION")
         rel_ranges, rel_begin_idx, rel_end_idx = self.ranges_from_ids(
@@ -341,6 +376,7 @@ Next, I will provide an actual description of a KG:
             rel_end_idx,
             ent_begin_idx,
             ent_end_idx,
+            prompt_ids
         )
 
     def ranges_from_ids(self, tokens: list[str], prefixs: list[str], ids: list[int]):
@@ -377,6 +413,10 @@ Next, I will provide an actual description of a KG:
                 else:
                     ranges.append((last_b_idx, i - 1))
                     last_b_idx = i
+
+        ranges.extend([(-1, -1)] * (len(ids) - len(ranges)))
+        assert len(ranges) == len(ids)
+
         indices = [ids, [0] * len(ids)]
         rel_ranges = torch.sparse_coo_tensor(
             indices,

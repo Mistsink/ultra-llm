@@ -45,6 +45,8 @@ class PretrainDatasetItemOutput:
     ent_end_idx: torch.Tensor
     ent_ranges: list[torch.Tensor]
 
+    _labels: Optional[torch.Tensor]=None
+
 
 @dataclass
 class PretrainDatasetOutput:
@@ -64,6 +66,8 @@ class PretrainDatasetOutput:
     ent_end_idx: torch.Tensor
     ent_ranges: list[torch.Tensor]
 
+    _labels: Optional[torch.Tensor]=None
+
     def __len__(self):
         return self.data.num_graphs
 
@@ -81,7 +85,29 @@ class PretrainDatasetOutput:
         self.ent_end_idx = self.ent_end_idx.to(device)
         self.ent_ranges = [i.to(device) for i in self.ent_ranges]
 
+        if self._labels is not None:
+            self._labels = self._labels.to(device)
+
         return self
+    
+    def __contains__(self, item):
+        if item == 'input_ids':
+            return True
+        else:
+            return False
+
+    def __getitem__(self, key):
+        if key == 'input_ids':
+            return torch.stack([self.ent_prompt, self.rel_prompt])
+        
+        return None
+        
+    def get(self, key, default_val: Optional[any]=None):
+        if key == 'labels':
+            return self._labels
+        elif key == 'return_loss':
+            return True
+        return default_val
 
 
 @dataclass
@@ -137,8 +163,9 @@ class InstrucInput:
     def to(self, device):
         self.input_ids = self.input_ids.to(device)
         self.label_ids = self.label_ids.to(device)
-        self.embs = [i.to(device) for i in self.embs]
-        self.g_emb = self.g_emb.to(device)
+        self.embs = self.embs.to(device)
+        if self.g_emb is not None:
+            self.g_emb = self.g_emb.to(device)
 
         return self
 

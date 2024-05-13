@@ -104,6 +104,7 @@ def build_model(
         token=cfg.model.hf_token,
         quantization_config=bnb_config,
         cfg=cfg,
+        # torch_dtype=torch.float16
     )
 
     # TODO 不晓得 Gemma 要不要设置 pad

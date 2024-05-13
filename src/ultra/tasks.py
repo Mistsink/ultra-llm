@@ -3,6 +3,8 @@ from torch_scatter import scatter_add
 from torch_geometric.data import Data
 import torch
 
+from random import random
+
 
 def edge_match(edge_index, query_index):
     # O((n + q)logn) time
@@ -41,6 +43,13 @@ def edge_match(edge_index, query_index):
 
 def negative_sampling(data, batch, num_negative, strict=True, limit_nodes=None):
     batch_size = len(batch)
+
+    # TODO FIXME batch_size 为1时，总是预测 h，而不是 t，这里需要进行随机
+    _bs = batch_size
+    if _bs == 1:
+        batch_size = 2
+
+
     pos_h_index, pos_t_index, pos_r_index = batch.t()
 
     # strict negative sampling vs random negative sampling
@@ -78,8 +87,18 @@ def negative_sampling(data, batch, num_negative, strict=True, limit_nodes=None):
     h_index = pos_h_index.unsqueeze(-1).repeat(1, num_negative + 1)
     t_index = pos_t_index.unsqueeze(-1).repeat(1, num_negative + 1)
     r_index = pos_r_index.unsqueeze(-1).repeat(1, num_negative + 1)
-    t_index[:batch_size // 2, 1:] = neg_t_index
-    h_index[batch_size // 2:, 1:] = neg_h_index
+    
+    # TODO FIXME 为了应对 bs 为1的情况，随机替换 h / t
+    if _bs == 1:
+        if random() > 0.5:
+            # 替换 t    (预测 t)
+            t_index[0, 1:] = neg_t_index
+        else:
+            # 替换 h    (预测 h)
+            h_index[0, 1:] = neg_h_index
+    else:
+        t_index[:batch_size // 2, 1:] = neg_t_index
+        h_index[batch_size // 2:, 1:] = neg_h_index
 
     return torch.stack([h_index, t_index, r_index], dim=-1)
 

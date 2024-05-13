@@ -71,7 +71,10 @@ class RelNBFNet(BaseNBFNet):
         if boundary is None:
             # initialize initial nodes (relations of interest in the batch) with all ones
             query = torch.ones(
-                h_index.shape[0], self.dims[0], device=h_index.device, dtype=torch.float
+                h_index.shape[0],
+                self.dims[0],
+                device=h_index.device,
+                dtype=h_index.dtype,
             )
             index = h_index.unsqueeze(-1).expand_as(query)
         else:
@@ -89,7 +92,9 @@ class RelNBFNet(BaseNBFNet):
             boundary.scatter_add_(1, index.unsqueeze(1), query.unsqueeze(1))
 
         size = (data.num_nodes, data.num_nodes)
-        edge_weight = torch.ones(data.num_edges, device=boundary.device)
+        edge_weight = torch.ones(
+            data.num_edges, device=boundary.device, dtype=boundary.dtype
+        )
 
         hiddens = []
         edge_weights = []
@@ -209,7 +214,9 @@ class EntityNBFNet(BaseNBFNet):
             self.hiddens = []
             self.edge_weights = []
             layer_input = boundary
-            edge_weight = torch.ones(data.num_edges, device=h_index.device)
+            edge_weight = torch.ones(
+                data.num_edges, device=h_index.device, dtype=boundary.dtype
+            )
         else:
             layer_input = self.hiddens[layer_idx - 1]
             edge_weight = self.edge_weights[layer_idx - 1]

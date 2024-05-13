@@ -2,6 +2,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils
 from torch.utils.data import Dataset, DataLoader
 from transformers import (
     Trainer,
@@ -29,7 +30,7 @@ from src.trainer.metric import metric_fn
 class KGLLMTrainer(DataloaderMixin, Trainer):
     def __init__(
         self,
-        cfg:Config,
+        cfg: Config,
         model: Union[PreTrainedModel, nn.Module] = None,
         args: TrainingArguments = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
@@ -65,7 +66,6 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         self.cfg = cfg
 
     def compute_loss(self, model, inputs: PretrainDatasetOutput, return_outputs=False):
-        # super().compute_loss(model, inputs, return_outputs)
         """
         Perform model.forward and calculate the loss.
         """
@@ -73,21 +73,27 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         outputs: GNNLLMOutput = model(data=inputs)
 
         # >>> decode <<<
-        # TODO create data for instruct tuning
         # 1. create dataloader for instruct tuning
         dataloader: list[InstrucInput] = self.get_instruct_dataloader(inputs, outputs)
-        
+
         # 2. forward
         losses = []
         for batch in dataloader:
-            outputs: CausalLMOutputWithPast = model(input_ids=batch.input_ids, embeds=batch.embs, labels=batch.label_ids)
+            batch = batch.to(self.accelerator.device)
+            outputs: CausalLMOutputWithPast = model(
+                input_ids=batch.input_ids, embeds=batch.embs, labels=batch.label_ids
+            )
 
             losses.append(outputs.loss)
 
         loss = torch.stack(losses).mean()
-        
-        return loss
+
+        self.log({
+            "train_loss": loss.detach()
+        })
+
         return (loss, outputs) if return_outputs else loss
+        return loss
         if self.label_smoother is not None:
             unwrapped_model = unwrap_model(model)
             if _is_peft_model(unwrapped_model):
@@ -99,7 +105,7 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
             else:
                 loss = self.label_smoother(outputs, labels)
         else:
-            loss = outputs.loss    
+            loss = outputs.loss
 
     def training_step(self, model, inputs) -> torch.Tensor:
         """

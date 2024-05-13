@@ -139,11 +139,12 @@ class GNNLLMModel(GemmaModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
             # >>> Replace special token embeddings <<<
-            inputs_embeds = self.__replace_common_special_token_emb(
-                input_ids=input_ids,
-                inputs_embeds=inputs_embeds,
-                model_input=model_input,
-            )
+            if model_input is not None:
+                inputs_embeds = self.__replace_common_special_token_emb(
+                    input_ids=input_ids,
+                    inputs_embeds=inputs_embeds,
+                    model_input=model_input,
+                )
 
             # >>> Replace info token embeddings when as decoder <<<
             if embeds is not None:
@@ -365,7 +366,7 @@ class GNNLLMModel(GemmaModel):
 
         hidden_states = self.norm(hidden_states)
 
-        # TODO R-GNN & LLM generate rel emb
+        # R-GNN & LLM generate rel emb
         if model_input is not None:
             if model_input.is_ent:
                 ent_emb = self.fuse_llm_ent(model_input, hidden_states, ent_emb)
@@ -400,7 +401,12 @@ class GNNLLMModel(GemmaModel):
             attentions=all_self_attns,
         )
 
-    def fuse_llm_ent(self, model_input: ModelInput, hidden_states: torch.Tensor, ent_state: torch.Tensor) -> torch.Tensor:
+    def fuse_llm_ent(
+        self,
+        model_input: ModelInput,
+        hidden_states: torch.Tensor,
+        ent_state: torch.Tensor,
+    ) -> torch.Tensor:
         bs = len(model_input.ranges)
         assert bs == 1, "暂时只支持 batch_size = 1, 否则显存会爆"
         model_input.mask_triples = model_input.mask_triples.squeeze(0)
@@ -409,14 +415,21 @@ class GNNLLMModel(GemmaModel):
             model_input.data[0].num_nodes,
             hidden_states.shape[2] * 2,
             device=self.device,
+            dtype=hidden_states.dtype
         )
         for i, ranges in enumerate(model_input.ranges):
             for _i, j in enumerate(model_input.data[i].n_id):
-                assert ranges[j][0][0] != 0, "确保每个 entity 都在 LLM 的prompt中出现过"
-                boundary[i, _i] = hidden_states[i, ranges[j][0]].view(-1)
+                j = _i  # 暂时这样写是因为 entity id 改成子图中的新id，而不是原图中的 id
+                if ranges[j][0][0] == -1:
+                    # 该 entity 未在 LLM 的prompt中出现过
+                    pass
+                else:
+                    boundary[i, _i] = hidden_states[i, ranges[j][0]].view(-1)
 
             # 单独处理 super_node
-            boundary[i, model_input.data[i].super_node_id] = hidden_states[i, [model_input.g_begin_idx, model_input.g_end_idx]].view(-1)
+            boundary[i, model_input.data[i].super_node_id] = hidden_states[
+                i, [model_input.g_begin_idx, model_input.g_end_idx]
+            ].view(-1)
 
         feat = torch.cat([boundary, ent_state], dim=2)
         feat = self.fuse_llm_ent_layer(feat)
@@ -432,25 +445,34 @@ class GNNLLMModel(GemmaModel):
 
         # 将 LLM 输出转为 GNN中的 boundary
         boundary = None
-        # TODO 每一层的 boundary 都使用更新后的 LLM_hidden_feat 来构建
+        # 每一层的 boundary 都使用更新后的 LLM_hidden_feat 来构建
         if idx >= 0:
             bs = len(model_input.ranges)
             assert bs == 1, "暂时只支持 batch_size = 1, 否则显存会爆"
-            model_input.mask_triples = model_input.mask_triples.squeeze(0)
+            while len(model_input.mask_triples.shape) > 3:
+                model_input.mask_triples = model_input.mask_triples.squeeze(0)
             boundary = torch.zeros(
                 bs,
                 model_input.data[0].num_nodes,
                 hidden_states.shape[2] * 2,
                 device=self.device,
+                dtype=hidden_states.dtype,
             )
             for i, ranges in enumerate(model_input.ranges):
                 for _i, j in enumerate(model_input.data[i].n_id):
-                    assert ranges[j][0][0] != 0, "确保每个 entity 都在 LLM 的prompt中出现过"
-                    boundary[i, _i] = hidden_states[i, ranges[j][0]].view(-1)
+                    j = _i  # 暂时这样写是因为 entity id 改成子图中的新id，而不是原图中的 id
+                    # assert ranges[j][0][0] != 0, "确保每个 entity 都在 LLM 的prompt中出现过"
+                    if ranges[j][0][0] == -1:
+                        # 该 entity 未在 LLM 的prompt中出现过
+                        pass
+                    else:
+                        boundary[i, _i] = hidden_states[i, ranges[j][0]].view(-1)
 
                 # 单独处理 super_node
-                boundary[i, model_input.data[i].super_node_id] = hidden_states[i, [model_input.g_begin_idx, model_input.g_end_idx]].view(-1)
-                
+                boundary[i, model_input.data[i].super_node_id] = hidden_states[
+                    i, [model_input.g_begin_idx, model_input.g_end_idx]
+                ].view(-1)
+
             boundary: torch.Tensor = self.llm_to_ent_layer(boundary)
 
         ent_emb = self.graph_model(model_input, boundary=boundary, layer_idx=idx)
@@ -477,11 +499,15 @@ class GNNLLMModel(GemmaModel):
         # ent_emb_copy = ent_emb.clone()
 
         # 更新特定索引位置的值
-#         ent_emb_copy.index_copy_(0, torch.tensor([237], device=gnn_ent_feat.device), gnn_ent_feat.unsqueeze(0))
-# Traceback (most recent call last):
-#   File "<string>", line 1, in <module>
-# RuntimeError: index_copy_(): Source/destination tensor must have same slice shapes. Destination slice shape: 238 64 at dimension 0 and source slice shape: 1 64 at dimension 0.
-        ent_emb.index_copy_(1, torch.tensor([ent_emb.shape[1]-1], device=ent_emb.device), gnn_ent_feat.unsqueeze(0))
+        #         ent_emb_copy.index_copy_(0, torch.tensor([237], device=gnn_ent_feat.device), gnn_ent_feat.unsqueeze(0))
+        # Traceback (most recent call last):
+        #   File "<string>", line 1, in <module>
+        # RuntimeError: index_copy_(): Source/destination tensor must have same slice shapes. Destination slice shape: 238 64 at dimension 0 and source slice shape: 1 64 at dimension 0.
+        ent_emb.index_copy_(
+            1,
+            torch.tensor([ent_emb.shape[1] - 1], device=ent_emb.device),
+            gnn_ent_feat.unsqueeze(0),
+        )
 
         # 使用更新后的副本替换原始的ent_emb
         # ent_emb = ent_emb_copy
@@ -509,10 +535,15 @@ class GNNLLMModel(GemmaModel):
             model_input.data[0].num_nodes // 2,
             hidden_states.shape[2] * 2,
             device=self.device,
+            dtype=hidden_states.dtype,
         )
         for i, ranges in enumerate(model_input.ranges):
             for j in range(model_input.data[i].num_nodes // 2):
-                boundary[i, j] = hidden_states[i, ranges[j][0]].view(-1)
+                if ranges[j][0][0] == -1:
+                    # 该 relation 未在 LLM 的prompt中出现过
+                    pass
+                else:
+                    boundary[i, j] = hidden_states[i, ranges[j][0]].view(-1)
 
         boundary: torch.Tensor = self.llm_to_rel_layer(boundary)
 

@@ -9,7 +9,7 @@ import transformers
 from transformers import Trainer, TrainingArguments, HfArgumentParser
 
 from script.build_model import build_model, build_tokenizer_model
-from src.trainer.metric import metric_fn
+from src.trainer.metric import ROUGE, metric_fn
 from src.trainer.trainer import KGLLMTrainer
 from config.config import Config
 from src.data.datasets import FB15k237Inductive
@@ -45,6 +45,8 @@ def parse_args(config_path: str) -> Config:
     parser = HfArgumentParser(Config)
     cfg: Config = parser.parse_yaml_file(config_path)[0]
     cfg.train = cfg.train.set_dataloader(train_batch_size=cfg.train.batch_size, eval_batch_size=cfg.train.batch_size)
+
+    # get_logger().
     return cfg
 
 
@@ -56,11 +58,11 @@ def get_data(cfg: Config) -> tuple[InMemoryDataset, CustomData, CustomData, Cust
 if __name__ == "__main__":
 
     cfg = parse_args("config/pretrain/pretrain_0.yaml")
-    transformers.set_seed(cfg.seed)
+    transformers.set_seed(cfg.train.seed)
 
     task_name = cfg.task.name
 
-    # TODO data sampler, loader, collator -> custom trainer
+    # data sampler, loader, collator -> custom trainer
     dataset, train_data, valid_data, test_data = get_data(cfg=cfg)
 
     tokenizer, model = build_tokenizer_model(cfg)
@@ -76,48 +78,33 @@ if __name__ == "__main__":
         train_dataset=train_data,
         eval_dataset=valid_data,
         tokenizer=tokenizer,
-        compute_metrics=metric_fn,
+        compute_metrics=ROUGE(cfg, tokenizer),
         # callbacks=[VLogCallback(save_path=os.path.join(cfg.output_dir, "history.png"))],
     )
+
+    # metrics = trainer.evaluate(eval_dataset=valid_data)
 
     trainer.train()
 
     # for transductive setting, use the whole graph for filtered ranking
-    filtered_data = [
-        Data(
-            edge_index=torch.cat(
-                [
-                    trg.target_edge_index,
-                    valg.target_edge_index,
-                    testg.target_edge_index,
-                ],
-                dim=1,
-            ),
-            edge_type=torch.cat(
-                [
-                    trg.target_edge_type,
-                    valg.target_edge_type,
-                    testg.target_edge_type,
-                ]
-            ),
-            num_nodes=trg.num_nodes,
-        )
-        for trg, valg, testg in zip(train_data, valid_data, test_data)
-    ]
-
-    train_and_validate(
-        cfg,
-        model,
-        train_data,
-        valid_data if "fast_test" not in cfg.train else short_valid,
-        filtered_data=filtered_data,
-        batch_per_epoch=cfg.train.batch_per_epoch,
-    )
-    if util.get_rank() == 0:
-        logger.warning(separator)
-        logger.warning("Evaluate on valid")
-    test(cfg, model, valid_data, filtered_data=filtered_data)
-    if util.get_rank() == 0:
-        logger.warning(separator)
-        logger.warning("Evaluate on test")
-    test(cfg, model, test_data, filtered_data=filtered_data)
+    # filtered_data = [
+    #     Data(
+    #         edge_index=torch.cat(
+    #             [
+    #                 trg.target_edge_index,
+    #                 valg.target_edge_index,
+    #                 testg.target_edge_index,
+    #             ],
+    #             dim=1,
+    #         ),
+    #         edge_type=torch.cat(
+    #             [
+    #                 trg.target_edge_type,
+    #                 valg.target_edge_type,
+    #                 testg.target_edge_type,
+    #             ]
+    #         ),
+    #         num_nodes=trg.num_nodes,
+    #     )
+    #     for trg, valg, testg in zip(train_data, valid_data, test_data)
+    # ]

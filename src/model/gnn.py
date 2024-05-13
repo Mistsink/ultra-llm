@@ -50,7 +50,7 @@ class GNNModel(nn.Module):
                 elif data.rel_emb.shape[1] <= data.data[0].super_edge_type[1]:
                     # 覆盖和添加
                     num_gap = data.data[0].super_edge_type[1] + 1 - data.rel_emb.shape[1]
-                    rel_emb = torch.cat([data.rel_emb, torch.zeros(1, num_gap, data.rel_emb.shape[2], device=data.rel_emb.device)], dim=1)
+                    rel_emb = torch.cat([data.rel_emb, torch.zeros(1, num_gap, data.rel_emb.shape[2], device=data.rel_emb.device, dtype=data.rel_emb.dtype)], dim=1)
                     rel_emb[0, data.data[0].super_edge_type] = super_edge_emb
                     data.rel_emb = rel_emb
                 

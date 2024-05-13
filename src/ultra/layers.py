@@ -66,7 +66,7 @@ class GeneralizedRelationalConv(MessagePassing):
     def forward(self, input, query, boundary, edge_index, edge_type, size, edge_weight=None, batch_size=None):
         if torch.isnan(self.layer_norm.weight).any():
             print("layer_norm has nan value")
-            self.layer_norm = nn.LayerNorm(self.output_dim, device=boundary.device)
+            self.layer_norm = nn.LayerNorm(self.output_dim, device=boundary.device, dtype=boundary.dtype)
 
 
         if batch_size is None:
@@ -182,7 +182,7 @@ class GeneralizedRelationalConv(MessagePassing):
 
         return output
 
-    def message_and_aggregate(self, edge_index, input, relation, boundary, edge_type, edge_weight, index, dim_size):
+    def message_and_aggregate(self, edge_index, input: torch.Tensor, relation: torch.Tensor, boundary, edge_type, edge_weight: torch.Tensor, index, dim_size):
         # fused computation of message and aggregate steps with the custom rspmm cuda kernel
         # speed up computation by several times
         # reduce memory complexity from O(|E|d) to O(|V|d), so we can apply it to larger graphs
@@ -198,8 +198,15 @@ class GeneralizedRelationalConv(MessagePassing):
             mul = self.message2mul[self.message_func]
         else:
             raise ValueError("Unknown message function `%s`" % self.message_func)
+        
+        edge_weight = edge_weight.to(dtype=torch.float32)
+        relation = relation.to(dtype=torch.float32)
+        input = input.to(dtype=torch.float32)
         if self.aggregate_func == "sum":
             update = generalized_rspmm(edge_index, edge_type, edge_weight, relation, input, sum="add", mul=mul)
+            update = update.to(dtype=boundary.dtype)
+            if torch.isnan(update).any() or torch.isinf(update).any():
+                raise f"after generalized_rspmm, update'dtype trans to {boundary.dtype}, has nan or inf"
             update = update + boundary
         elif self.aggregate_func == "mean":
             update = generalized_rspmm(edge_index, edge_type, edge_weight, relation, input, sum="add", mul=mul)
