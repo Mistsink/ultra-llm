@@ -49,33 +49,21 @@ class PretrainDataset(Dataset):
 
         # 采样子图中要预测的 triples，以及对应的负样本
         # cfg task num_mask
-        edge_mask = torch.randperm(subg.target_edge_index.shape[1])[:self.cfg.task.num_mask]
-        # mask_triples: tris x 3
-        mask_triples = (
-            torch.cat(
-                [
-                    subg.target_edge_index[:, edge_mask],
-                    subg.target_edge_type[edge_mask].unsqueeze(0),
-                ]
-            )
-            .t()
-            .view(-1, 3)
-        )
+        mask_triples = None
+        while True:
+            try:
+                mask_triples = self.mask_edges(subg)
+                break
+            except:
+                pass
 
-        #   检查是不是 0 项 pos，其他项 neg
-        # mask_triples: tris x 1+num_neg x 3
-        mask_triples = tasks.negative_sampling(
-            self.data,  # 这里使用完整图来筛选负样本
-            mask_triples,
-            self.cfg.task.num_negative,
-            strict=self.cfg.task.strict_negative,
-            limit_nodes=subg.n_id,
-        )
         # 将 mask_triples 中的 n_id 转成新的子图中的 n_id, 重新标记 [暂时不写]
         origin_id_to_new_id = {
             ori_id.item(): idx for idx, ori_id in enumerate(subg.n_id)
         }
-        mask_triples[:, :, :2] = mask_triples[:, :, :2].apply_(lambda x: origin_id_to_new_id[x])
+        mask_triples[:, :, :2] = mask_triples[:, :, :2].apply_(
+            lambda x: origin_id_to_new_id[x]
+        )
 
         # TODO FIXME 随机 mask 一下文本信息或者结构信息 [暂时不写]
 
@@ -104,7 +92,7 @@ class PretrainDataset(Dataset):
             rel_end_idx,
             ent_begin_idx,
             ent_end_idx,
-            prompt_ids
+            prompt_ids,
         ) = self.record_node_idx_range(rel_ids, prompt_ids, mask_triples, ent_ids)
 
         return PretrainDatasetItemOutput(
@@ -119,6 +107,35 @@ class PretrainDataset(Dataset):
             ent_end_idx=ent_end_idx,
             ent_ranges=ent_ranges,
         )
+
+    def mask_edges(self, subg, triples=None):
+        if triples is None:
+            edge_mask = torch.randperm(subg.target_edge_index.shape[1])[
+                : self.cfg.task.num_mask
+            ]
+            # mask_triples: tris x 3
+            triples = (
+                torch.cat(
+                    [
+                        subg.target_edge_index[:, edge_mask],
+                        subg.target_edge_type[edge_mask].unsqueeze(0),
+                    ]
+                )
+                .t()
+                .view(-1, 3)
+            )
+
+        #   检查是不是 0 项 pos，其他项 neg
+        # mask_triples: tris x 1+num_neg x 3
+        mask_triples = tasks.negative_sampling(
+            self.data,  # 这里使用完整图来筛选负样本
+            triples,
+            self.cfg.task.num_negative,
+            strict=self.cfg.task.strict_negative,
+            limit_nodes=subg.n_id,
+        )
+
+        return mask_triples
 
     @staticmethod
     def collate_fn(batch: list[PretrainDatasetItemOutput]) -> PretrainDatasetOutput:
@@ -159,7 +176,7 @@ class PretrainDataset(Dataset):
             ent_begin_idx=ent_begin_idx,
             ent_end_idx=ent_end_idx,
             ent_ranges=ent_ranges,
-            _labels=labels
+            _labels=labels,
         )
 
     def sample_from_edge_index(self, entities: torch.Tensor) -> CustomSubData:
@@ -202,6 +219,7 @@ class PretrainDataset(Dataset):
         new_oriid_idx_map = {
             ori_id: idx for idx, ori_id in enumerate(shuffled_n_id.tolist())
         }
+
         def _replace(x):
             return new_oriid_idx_map[old_idx_oriid_map[x]]
 
@@ -322,7 +340,7 @@ Next, I will provide an actual description of a KG:
             print(f"ID {id_to_access} 对应的值为: {sparse_tensor[id_to_access][0]}")
         """
         # for rel node range
-        g_end_id = self.tokenizer(SpecialToken.G_END.value)['input_ids'][1]
+        g_end_id = self.tokenizer(SpecialToken.G_END.value)["input_ids"][1]
         prompt_ids[:, -1] = g_end_id
         tokens = self.tokenizer.convert_ids_to_tokens(prompt_ids[0])
         prefixs = self.tokenizer.tokenize(" [RELATION")
@@ -376,7 +394,7 @@ Next, I will provide an actual description of a KG:
             rel_end_idx,
             ent_begin_idx,
             ent_end_idx,
-            prompt_ids
+            prompt_ids,
         )
 
     def ranges_from_ids(self, tokens: list[str], prefixs: list[str], ids: list[int]):

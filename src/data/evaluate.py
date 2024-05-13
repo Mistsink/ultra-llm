@@ -30,15 +30,23 @@ class EvaluateDataset(PretrainDataset):
         entities = torch.cat([triple[:, 0], triple[:, 1]]).unique()
         subg = self.sample_from_edge_index(entities)
 
+        mask_triples = None
+        while True:
+            try:
+                mask_triples = self.mask_edges(subg, triple)
+                break
+            except:
+                pass
         #   检查是不是 0 项 pos，其他项 neg
         # mask_triples: tris x 1+num_neg x 3
-        mask_triples = tasks.negative_sampling(
-            self.data,  # 这里使用完整图来筛选负样本
-            triple,
-            self.cfg.task.num_negative,
-            strict=self.cfg.task.strict_negative,
-            limit_nodes=subg.n_id,
-        )
+        # mask_triples = tasks.negative_sampling(
+        #     self.data,  # 这里使用完整图来筛选负样本
+        #     triple,
+        #     self.cfg.task.num_negative,
+        #     strict=self.cfg.task.strict_negative,
+        #     limit_nodes=subg.n_id,
+        # )
+
         # 将 mask_triples 中的 n_id 转成新的子图中的 n_id, 重新标记
         origin_id_to_new_id = {
             ori_id.item(): idx for idx, ori_id in enumerate(subg.n_id)
@@ -92,6 +100,36 @@ class EvaluateDataset(PretrainDataset):
             ent_ranges=ent_ranges,
             _labels=labels
         )
+    
+    def mask_edges(self, subg, triples=None):
+        if triples is None:
+            edge_mask = torch.randperm(subg.target_edge_index.shape[1])[
+                : self.cfg.task.num_mask
+            ]
+            # mask_triples: tris x 3
+            triples = (
+                torch.cat(
+                    [
+                        subg.target_edge_index[:, edge_mask],
+                        subg.target_edge_type[edge_mask].unsqueeze(0),
+                    ]
+                )
+                .t()
+                .view(-1, 3)
+            )
+
+        #   检查是不是 0 项 pos，其他项 neg
+        # mask_triples: tris x 1+num_neg x 3
+        mask_triples = tasks.negative_sampling(
+            self.data,  # 这里使用完整图来筛选负样本
+            triples,
+            self.cfg.task.num_negative,
+            strict=self.cfg.task.strict_negative,
+            limit_nodes=subg.n_id,
+        )
+
+        return mask_triples
+
 
 
 if __name__ == "__main__":

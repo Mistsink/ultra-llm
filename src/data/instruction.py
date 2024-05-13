@@ -180,7 +180,7 @@ Below is the embedding information for all candidate tail entities: """
         )
         assert (
             last_info_node_idx != -1
-        ), "Cannot find enough info node tokens in the tokenized prompt."
+        ), f"Cannot find enough info node tokens in the tokenized prompt.\ntoekns:{tokens[-20:]}\nnum_nodes: {num_info_nodes}"
         label_tokens_prefix = tokenizer.tokenize(" [ENTITY")
         label_idx = find_subsequence_in_list(
             tokens, label_tokens_prefix, start_index=last_info_node_idx
