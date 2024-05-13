@@ -37,3 +37,6 @@ hf_models/
 !/src/data/
 output/
 config/**/*.yaml
+
+*.pickle
+wandb
