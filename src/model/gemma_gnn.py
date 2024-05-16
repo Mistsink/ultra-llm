@@ -18,6 +18,7 @@ from src.data.special_tokens import SpecialToken
 from src.data.types import CustomSubDataWithSuperNode, ModelInput
 from src.model.layer import MLP
 from src.model.gnn import GNNModel
+from src.model.type import GNNLLMConfig
 
 
 @dataclass
@@ -27,6 +28,8 @@ class GNNLLMModelOutput(BaseModelOutputWithPast):
 
 
 class GNNLLMModel(GemmaModel):
+    config_class = GNNLLMConfig
+
     def __init__(self, config: GemmaConfig, cfg: Config):
         super().__init__(config)
 
@@ -415,7 +418,7 @@ class GNNLLMModel(GemmaModel):
             model_input.data[0].num_nodes,
             hidden_states.shape[2] * 2,
             device=self.device,
-            dtype=hidden_states.dtype
+            dtype=hidden_states.dtype,
         )
         for i, ranges in enumerate(model_input.ranges):
             for _i, j in enumerate(model_input.data[i].n_id):

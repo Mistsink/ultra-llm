@@ -89,7 +89,7 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         loss = torch.stack(losses).mean()
 
         self.log({
-            "train_loss": loss.detach()
+            "train_loss": loss.detach().item()
         })
 
         return (loss, outputs) if return_outputs else loss

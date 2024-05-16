@@ -15,6 +15,7 @@ class ModelDetailConfig:
 
 @dataclass
 class ModelConfig:
+    load_lora: bool = field(default=False)
     class_name: str = field(default="GemmaForCausalLM")
     llm_name: str = field(default="gpt2")
     cache_dir: str = field(default="")

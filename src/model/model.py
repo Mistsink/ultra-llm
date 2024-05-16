@@ -13,6 +13,7 @@ from src.model.layer import MLP
 from src.data.types import PretrainDatasetOutput, ModelInput
 from src.ultra.models import RelNBFNet, EntityNBFNet
 from src.model.gemma_gnn import GNNLLMModel, GNNLLMModelOutput
+from src.model.type import GNNLLMConfig
 
 
 @dataclass
@@ -22,6 +23,7 @@ class GNNLLMOutput(CausalLMOutputWithPast):
 
 
 class GNNLLM(GemmaForCausalLM):
+    config_class = GNNLLMConfig
     def __init__(self, config: GemmaConfig, cfg: Config):
         super().__init__(config)
         self.model = GNNLLMModel(config, cfg=cfg)

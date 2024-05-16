@@ -23,6 +23,7 @@ from peft import (
     get_peft_model,
     LoraConfig,
     TaskType,
+    PeftConfig
 )
 
 
@@ -60,6 +61,7 @@ def build_tokenizer(cfg: Config) -> GemmaTokenizer:
             cache_dir=cfg.model.cache_dir,
             token=cfg.model.hf_token,
             padding_side="left",
+            local_files_only=True
         )
     elif "llama" in cfg.model.llm_name:
         tokenizer = LlamaTokenizer.from_pretrained(
@@ -69,6 +71,13 @@ def build_tokenizer(cfg: Config) -> GemmaTokenizer:
             padding_side="left",
         )
     else:
+        # AutoPeftModelForCausalLM.from_pretrained()
+        # tokenizer = GemmaTokenizer.from_pretrained(
+        #     cfg.model.llm_name,
+        #     cache_dir=cfg.model.cache_dir,
+        #     token=cfg.model.hf_token,
+        #     padding_side="left",
+        # )
         raise ValueError(f"Invalid LLM name: {cfg.model.llm_name}")
 
     return tokenizer
@@ -86,8 +95,9 @@ def build_model(
         "llm_to_rel_layer",
         "llm_to_ent_layer",
         "fuse_llm_ent_layer",
-        "proj_rel_layer"
+        "proj_rel_layer",
     ]
+
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
@@ -96,7 +106,7 @@ def build_model(
         # bnb_4bit_compute_dtype=torch.float32,
         # llm_int8_threshold=6.0,
         # llm_int8_has_fp16_weight=False,
-        llm_int8_skip_modules=custom_layers
+        llm_int8_skip_modules=custom_layers,
     )
     model: GNNLLM = GNNLLM.from_pretrained(
         cfg.model.llm_name,
@@ -104,6 +114,7 @@ def build_model(
         token=cfg.model.hf_token,
         quantization_config=bnb_config,
         cfg=cfg,
+        local_files_only=True,
         # torch_dtype=torch.float16
     )
 
@@ -116,18 +127,24 @@ def build_model(
         model,
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
-    lora_modules = find_all_linear_names(model, cfg)
 
-    peft_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        inference_mode=False,
-        r=8,
-        lora_alpha=8,
-        lora_dropout=0.1,
-        target_modules=lora_modules,
-    )
-
-    peft_model = get_peft_model(model, peft_config)
+    if not cfg.model.load_lora:
+        lora_modules = find_all_linear_names(model, cfg)
+        peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            inference_mode=False,
+            r=8,
+            lora_alpha=8,
+            lora_dropout=0.1,
+            target_modules=lora_modules,
+            modules_to_save=custom_layers
+        )
+        peft_model = get_peft_model(model, peft_config)
+    else:
+    # if load lora model
+        peft_config = PeftConfig.from_pretrained(cfg.model.cache_dir)
+        peft_model = PeftModel.from_pretrained(model, cfg.model.cache_dir, config=peft_config)
+    
     set_requires_grad(peft_model, custom_layers, requires_grad=True)
 
     # assert embed_tokens is not requires_grad

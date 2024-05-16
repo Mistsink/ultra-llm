@@ -1,8 +1,6 @@
 import os
-# 好像没用
 os.environ.setdefault("HF_HUB_OFFLINE", "0")
 os.environ['HF_HUB_OFFLINE'] = "0"
-
 import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -61,7 +59,7 @@ def get_data(cfg: Config) -> tuple[InMemoryDataset, CustomData, CustomData, Cust
 
 if __name__ == "__main__":
 
-    cfg = parse_args("config/pretrain/pretrain_0.yaml")
+    cfg = parse_args("config/pretrain/eval.yaml")
     transformers.set_seed(cfg.train.seed)
 
     task_name = cfg.task.name
@@ -85,12 +83,25 @@ if __name__ == "__main__":
         compute_metrics=ROUGE(cfg, tokenizer),
         # callbacks=[VLogCallback(save_path=os.path.join(cfg.output_dir, "history.png"))],
     )
+    # trainer.train()
+    metrics = trainer.evaluate(eval_dataset=valid_data)
+    print(metrics)
+
+    # if trainer.is_deepspeed_enabled:
+    #     trainer.deepspeed = trainer.model_wrapped
+    trainer.save_model()
+
 
     # metrics = trainer.evaluate(eval_dataset=valid_data)
 
-    trainer.train()
+    # trainer.train(resume_from_checkpoint="/disk1/hy/ultra_llm/output/checkpoint-4000/")
+    # trainer._load_from_checkpoint("/disk1/hy/ultra_llm/output/checkpoint-4000/")
+    metrics = trainer.evaluate(eval_dataset=valid_data)
+    print(metrics)
     metrics = trainer.evaluate(eval_dataset=test_data)
     print(metrics)
+
+    # trainer.ev
 
     # for transductive setting, use the whole graph for filtered ranking
     # filtered_data = [

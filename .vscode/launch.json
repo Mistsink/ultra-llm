@@ -27,6 +27,18 @@
             "console": "integratedTerminal"
         },
         {
+            "name": "Acc eval",
+            "type": "python",
+            "request": "launch",
+            "module": "accelerate.commands.launch",
+            "args": [
+                "--config_file", "config/ac.yaml",
+                "${workspaceFolder}/script/demo_eval.py"
+            ],
+            "justMyCode": false,
+            "console": "integratedTerminal"
+        },
+        {
             // debug for any file
             "name": "Python: Current File",
             "type": "debugpy",
