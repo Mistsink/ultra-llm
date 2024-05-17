@@ -65,6 +65,32 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         )
         self.cfg = cfg
 
+    def compute_loss_train(self, model, inputs: PretrainDatasetOutput, return_outputs):
+        # >>> encode <<<
+        outputs: GNNLLMOutput = model(data=inputs)
+
+        # >>> decode <<<
+        # 1. create dataloader for instruct tuning
+        dataloader: list[InstrucInput] = self.get_instruct_dataloader(inputs, outputs)
+
+        # 2. forward
+        losses = []
+        for batch in dataloader:
+            batch = batch.to(self.accelerator.device)
+            outputs: CausalLMOutputWithPast = model(
+                input_ids=batch.input_ids, embeds=batch.embs, labels=batch.label_ids
+            )
+
+            losses.append(outputs.loss)
+
+        loss = torch.stack(losses).mean()
+
+        self.log({
+            "train_loss": loss.detach().item()
+        })
+
+        return (loss, outputs) if return_outputs else loss
+
     def compute_loss(self, model, inputs: PretrainDatasetOutput, return_outputs=False):
         """
         Perform model.forward and calculate the loss.
@@ -93,26 +119,24 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         })
 
         return (loss, outputs) if return_outputs else loss
-        return loss
-        if self.label_smoother is not None:
-            unwrapped_model = unwrap_model(model)
-            if _is_peft_model(unwrapped_model):
-                model_name = unwrapped_model.base_model.model._get_name()
-            else:
-                model_name = unwrapped_model._get_name()
-            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
-                loss = self.label_smoother(outputs, labels, shift_labels=True)
-            else:
-                loss = self.label_smoother(outputs, labels)
-        else:
-            loss = outputs.loss
 
     def training_step(self, model, inputs) -> torch.Tensor:
         """
         invoke the compute_loss method, then backward loss and return the loss tensor.
         :return: The loss tensor.
         """
+        self._stage = 'train'
         return super().training_step(model, inputs)
+    
+    def train(
+        self,
+        resume_from_checkpoint: Optional[Union[str, bool]] = None,
+        trial= None,
+        ignore_keys_for_eval: Optional[List[str]] = None,
+        **kwargs,
+    ):
+        self._stage = 'train'
+        return super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
 
     def prediction_step(
         self,
@@ -152,7 +176,18 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         ignore_keys: List[str] | None = None,
         metric_key_prefix: str = "test",
     ) -> PredictionOutput:
+        self._stage = 'test'
         return super().predict(test_dataset, ignore_keys, metric_key_prefix)
+    
+
+    def evaluate(
+        self,
+        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> Dict[str, float]:
+        self._stage = 'eval'
+        return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
 
 
 if __name__ == "__main__":

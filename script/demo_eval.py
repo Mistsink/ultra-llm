@@ -84,6 +84,7 @@ if __name__ == "__main__":
         # callbacks=[VLogCallback(save_path=os.path.join(cfg.output_dir, "history.png"))],
     )
     # trainer.train()
+    metrics = trainer.predict(test_dataset=test_data)
     metrics = trainer.evaluate(eval_dataset=valid_data)
     print(metrics)
 
