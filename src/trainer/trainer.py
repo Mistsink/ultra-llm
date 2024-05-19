@@ -12,7 +12,10 @@ from transformers import (
     PreTrainedTokenizerBase,
     TrainerCallback,
     DataCollator,
+    GemmaForCausalLM,
+    GenerationConfig
 )
+from transformers.generation.utils import GenerateDecoderOnlyOutput
 from transformers.trainer import _is_peft_model
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.trainer_utils import PredictionOutput, EvalLoopOutput
@@ -65,14 +68,7 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         )
         self.cfg = cfg
 
-    def compute_loss_train(self, model, inputs: PretrainDatasetOutput, return_outputs):
-        # >>> encode <<<
-        outputs: GNNLLMOutput = model(data=inputs)
-
-        # >>> decode <<<
-        # 1. create dataloader for instruct tuning
-        dataloader: list[InstrucInput] = self.get_instruct_dataloader(inputs, outputs)
-
+    def compute_loss_train(self, model, dataloader: List[InstrucInput]) -> Tuple[torch.Tensor, GNNLLMOutput]:
         # 2. forward
         losses = []
         for batch in dataloader:
@@ -85,11 +81,28 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
 
         loss = torch.stack(losses).mean()
 
-        self.log({
-            "train_loss": loss.detach().item()
-        })
+        return loss, outputs
+    
 
-        return (loss, outputs) if return_outputs else loss
+    def compute_loss_test(self, model: GemmaForCausalLM, dataloader: List[InstrucInput]) -> Tuple[torch.Tensor, GNNLLMOutput]:
+        # 2. forward
+        losses = []
+
+        assert len(dataloader) == 1, "Only one batch is allowed in test mode"
+
+        for batch in dataloader:
+            batch = batch.to(self.accelerator.device)
+            # outputs: CausalLMOutputWithPast = model(
+            #     input_ids=batch.input_ids, embeds=batch.embs, labels=batch.label_ids
+            # )
+            outputs: GenerateDecoderOnlyOutput = model.generate(inputs=batch.input_ids, generation_config=GenerationConfig(max_length=20, min_length=2), embeds=batch.embs, return_dict_in_generate=True, output_scores=True)
+
+            losses.append(outputs.loss)
+
+        loss = torch.stack(losses).mean()
+
+        return loss, outputs
+
 
     def compute_loss(self, model, inputs: PretrainDatasetOutput, return_outputs=False):
         """
@@ -102,17 +115,14 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         # 1. create dataloader for instruct tuning
         dataloader: list[InstrucInput] = self.get_instruct_dataloader(inputs, outputs)
 
-        # 2. forward
-        losses = []
-        for batch in dataloader:
-            batch = batch.to(self.accelerator.device)
-            outputs: CausalLMOutputWithPast = model(
-                input_ids=batch.input_ids, embeds=batch.embs, labels=batch.label_ids
-            )
-
-            losses.append(outputs.loss)
-
-        loss = torch.stack(losses).mean()
+        if self._stage == 'train':
+            loss, outputs = self.compute_loss_train(model, dataloader)
+        elif self._stage == 'eval':
+            loss, outputs = self.compute_loss_train(model, dataloader)
+        elif self._stage == 'test':
+            loss, outputs = self.compute_loss_test(model, dataloader)
+        else:
+            raise ValueError(f"Invalid stage: {self._stage}")
 
         self.log({
             "train_loss": loss.detach().item()

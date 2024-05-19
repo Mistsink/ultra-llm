@@ -70,7 +70,6 @@ class DataloaderMixin(BaseClass):
     def get_instruct_dataloader(self, inputs: PretrainDatasetOutput, outputs: GNNLLMOutput) -> DataLoader:
         dataset = LPInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len)
 
-        # TODO FIXME cfg 中设置 专门的 instruct tuning 的 batch_size
         dataloader_params = {
             "batch_size": self.cfg.train.instruct_batch_size,
             "collate_fn": LPInstrucDataset.collate_fn,

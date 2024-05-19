@@ -176,9 +176,25 @@ class GNNLLM(GemmaForCausalLM):
         return output_attentions, output_hidden_states, return_dict
 
 
+    def prepare_inputs_for_generation(
+        self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, cache_position=None, **kwargs
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids, past_key_values=past_key_values, attention_mask=attention_mask, inputs_embeds=inputs_embeds, **kwargs
+        )
+
+        # TODO need :param embeds
+
+        return model_inputs
+
 class TestModel(nn.Module):
     def __inin__(self):
         pass
 
     def forward(self, data, batch):
         return torch.ones(batch.shape[0], 1)
+
+
+if __name__ == "__main__":
+    m = GNNLLM(None, None)
+    m.generate()
