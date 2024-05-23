@@ -124,18 +124,19 @@ class GNNLLM(GemmaForCausalLM):
                 embeds=embeds
             )
 
-        # TODO FIXME 为了减少计算量和显存，只预测最后的若干个 token 的 logits
-        # 链接预测任务中暂时取倒数 20个 token
-        hidden_states = outputs[0][:, -20:, :]
-        logits: torch.Tensor = self.lm_head(hidden_states)
-        logits = logits.float()
-        loss = None
-
-        # labels 也要修正成倒数 20个 token
-        labels = labels[:, -20:]
-
-        # TODO Instruction Tuning
+        # Instruction Tuning
         if labels is not None:
+        # TODO FIXME 为了减少计算量和显存，只预测最后的若干个 token 的 logits
+            # 链接预测任务中暂时取倒数 20个 token
+            hidden_states = outputs[0][:, -20:, :]
+            logits: torch.Tensor = self.lm_head(hidden_states)
+            logits = logits.float()
+            loss = None
+
+            # labels 也要修正成倒数 20个 token
+            labels = labels[:, -20:]
+
+        
             # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
@@ -147,8 +148,14 @@ class GNNLLM(GemmaForCausalLM):
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
 
-        # TODO FIXME 这里是为了让返回的 logits 数据变少，否则在 eval 时外部会一直保留积累每个 batch 的 logits，送给 compute_metric fn 中使用
-        logits = shift_logits.argmax(-1).unsqueeze(0)  # [labels != -100]
+            # TODO FIXME 这里是为了让返回的 logits 数据变少，否则在 eval 时外部会一直保留积累每个 batch 的 logits，送给 compute_metric fn 中使用
+            logits = shift_logits.argmax(-1).unsqueeze(0)  # [labels != -100]
+        else:
+            # For generate
+            hidden_states = outputs[0]
+            logits = self.lm_head(hidden_states)
+            logits = logits.float()
+            loss = None
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -184,7 +191,7 @@ class GNNLLM(GemmaForCausalLM):
         )
 
         # TODO need :param embeds
-
+        model_inputs['embeds'] = kwargs['embeds']
         return model_inputs
 
 class TestModel(nn.Module):

@@ -13,7 +13,7 @@ from transformers import (
     TrainerCallback,
     DataCollator,
     GemmaForCausalLM,
-    GenerationConfig
+    GenerationConfig,
 )
 from transformers.generation.utils import GenerateDecoderOnlyOutput
 from transformers.trainer import _is_peft_model
@@ -68,7 +68,9 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         )
         self.cfg = cfg
 
-    def compute_loss_train(self, model, dataloader: List[InstrucInput]) -> Tuple[torch.Tensor, GNNLLMOutput]:
+    def compute_loss_train(
+        self, model, dataloader: List[InstrucInput]
+    ) -> Tuple[torch.Tensor, GNNLLMOutput]:
         # 2. forward
         losses = []
         for batch in dataloader:
@@ -82,27 +84,42 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         loss = torch.stack(losses).mean()
 
         return loss, outputs
-    
 
-    def compute_loss_test(self, model: GemmaForCausalLM, dataloader: List[InstrucInput]) -> Tuple[torch.Tensor, GNNLLMOutput]:
-        # 2. forward
-        losses = []
-
+    def compute_loss_test(
+        self, model: GemmaForCausalLM, dataloader: List[InstrucInput]
+    ) -> Tuple[torch.Tensor, GNNLLMOutput]:
         assert len(dataloader) == 1, "Only one batch is allowed in test mode"
 
         for batch in dataloader:
             batch = batch.to(self.accelerator.device)
-            # outputs: CausalLMOutputWithPast = model(
-            #     input_ids=batch.input_ids, embeds=batch.embs, labels=batch.label_ids
-            # )
-            outputs: GenerateDecoderOnlyOutput = model.generate(inputs=batch.input_ids, generation_config=GenerationConfig(max_length=20, min_length=2), embeds=batch.embs, return_dict_in_generate=True, output_scores=True)
+            # 修剪 input_ids: 去除 label_ids
+            for i in range(batch.label_ids.shape[1] - 1, -1, -1):
+                if batch.label_ids[0][i] == -100:
+                    break
+            batch.input_ids = batch.input_ids[:, : i + 1]
 
-            losses.append(outputs.loss)
+            outputs: GenerateDecoderOnlyOutput = model.generate(
+                inputs=batch.input_ids,
+                generation_config=GenerationConfig(max_new_tokens=23, min_new_tokens=2),
+                embeds=batch.embs,
+                return_dict_in_generate=True,
+            )
 
-        loss = torch.stack(losses).mean()
+        # outputs
+        #       sequences : batch_size * tokens
+        # 1. 修剪成 2048这样正确的长度 -> batch.label_ids.shape[1, 2048]
+        # 2. ret_object.logits = sequences_fixed
+        outputs.logits = outputs.sequences[:, : batch.label_ids.shape[1]]
+        # outputs["logits"] = outputs.logits
+        # del outputs["sequences"]
+        # 这里只是为了仅保留一个 kv
+        outputs["sequences"] = outputs.logits
 
-        return loss, outputs
+        # loss
+        #   dummy loss -> torch.tensor(0, device=)
+        dummy_loss = torch.tensor(0.0, device=outputs.logits.device)
 
+        return dummy_loss, outputs
 
     def compute_loss(self, model, inputs: PretrainDatasetOutput, return_outputs=False):
         """
@@ -115,18 +132,16 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         # 1. create dataloader for instruct tuning
         dataloader: list[InstrucInput] = self.get_instruct_dataloader(inputs, outputs)
 
-        if self._stage == 'train':
+        if self._stage == "train":
             loss, outputs = self.compute_loss_train(model, dataloader)
-        elif self._stage == 'eval':
+        elif self._stage == "eval":
             loss, outputs = self.compute_loss_train(model, dataloader)
-        elif self._stage == 'test':
+        elif self._stage == "test":
             loss, outputs = self.compute_loss_test(model, dataloader)
         else:
             raise ValueError(f"Invalid stage: {self._stage}")
 
-        self.log({
-            "train_loss": loss.detach().item()
-        })
+        self.log({f"{self._stage}_loss": loss.detach().item()})
 
         return (loss, outputs) if return_outputs else loss
 
@@ -135,18 +150,20 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         invoke the compute_loss method, then backward loss and return the loss tensor.
         :return: The loss tensor.
         """
-        self._stage = 'train'
+        self._stage = "train"
         return super().training_step(model, inputs)
-    
+
     def train(
         self,
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
-        trial= None,
+        trial=None,
         ignore_keys_for_eval: Optional[List[str]] = None,
         **kwargs,
     ):
-        self._stage = 'train'
-        return super().train(resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs)
+        self._stage = "train"
+        return super().train(
+            resume_from_checkpoint, trial, ignore_keys_for_eval, **kwargs
+        )
 
     def prediction_step(
         self,
@@ -186,9 +203,8 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         ignore_keys: List[str] | None = None,
         metric_key_prefix: str = "test",
     ) -> PredictionOutput:
-        self._stage = 'test'
+        self._stage = "test"
         return super().predict(test_dataset, ignore_keys, metric_key_prefix)
-    
 
     def evaluate(
         self,
@@ -196,7 +212,7 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
-        self._stage = 'eval'
+        self._stage = "eval"
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
 
 

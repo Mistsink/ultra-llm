@@ -57,15 +57,18 @@ class DataloaderMixin(BaseClass):
         pprint(kwargs)
 
     def get_test_dataloader(self, test_dataset: Optional[Dataset] = None) -> DataLoader:
+        dataset = EvaluateDataset(test_dataset, self.tokenizer, self.cfg)
+
         dataloader_params = {
             "batch_size": self.args.eval_batch_size,
-            "collate_fn": self.test_collator,
+            "collate_fn": EvaluateDataset.collate_fn,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
         }
 
-        # We use the same batch_size as for eval.
-        return self.accelerator.prepare(DataLoader(test_dataset, **dataloader_params))
+        eval_dataloader = DataLoader(dataset, **dataloader_params)
+
+        return self.accelerator.prepare(eval_dataloader)
     
     def get_instruct_dataloader(self, inputs: PretrainDatasetOutput, outputs: GNNLLMOutput) -> DataLoader:
         dataset = LPInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len)

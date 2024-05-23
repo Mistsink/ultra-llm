@@ -232,6 +232,8 @@ class GNNLLMModel(GemmaModel):
                     continue
                 inputs_embeds[i][j] = embeds[i][_cnt]
                 _cnt += 1
+                if _cnt == len(embeds[i]):
+                    break
 
         return inputs_embeds
 

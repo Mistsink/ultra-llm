@@ -32,7 +32,7 @@
             "request": "launch",
             "module": "accelerate.commands.launch",
             "args": [
-                "--config_file", "config/ac.yaml",
+                "--config_file", "config/ac_eval.yaml",
                 "${workspaceFolder}/script/demo_eval.py"
             ],
             "justMyCode": false,

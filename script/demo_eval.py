@@ -57,48 +57,17 @@ if __name__ == "__main__":
         eval_dataset=valid_data,
         tokenizer=tokenizer,
         compute_metrics=ROUGE(cfg, tokenizer),
-        # callbacks=[VLogCallback(save_path=os.path.join(cfg.output_dir, "history.png"))],
     )
 
     # trainer.train()
-    metrics = trainer.predict(test_dataset=valid_data)
-    metrics = trainer.evaluate(eval_dataset=valid_data)
+    line = "-----" * 10
+    # metrics = trainer.predict(test_dataset=valid_data)
+    # print(line)
+    # print(f"predict on VALID_data")
+    # print(metrics)
+    # print(line)
+    metrics = trainer.predict(test_dataset=test_data)
+    print(line)
+    print(f"predict on TEST_data")
     print(metrics)
-
-    # if trainer.is_deepspeed_enabled:
-    #     trainer.deepspeed = trainer.model_wrapped
-    trainer.save_model()
-
-    # metrics = trainer.evaluate(eval_dataset=valid_data)
-
-    # trainer.train(resume_from_checkpoint="/disk1/hy/ultra_llm/output/checkpoint-4000/")
-    # trainer._load_from_checkpoint("/disk1/hy/ultra_llm/output/checkpoint-4000/")
-    metrics = trainer.evaluate(eval_dataset=valid_data)
-    print(metrics)
-    metrics = trainer.evaluate(eval_dataset=test_data)
-    print(metrics)
-
-    # trainer.ev
-
-    # for transductive setting, use the whole graph for filtered ranking
-    # filtered_data = [
-    #     Data(
-    #         edge_index=torch.cat(
-    #             [
-    #                 trg.target_edge_index,
-    #                 valg.target_edge_index,
-    #                 testg.target_edge_index,
-    #             ],
-    #             dim=1,
-    #         ),
-    #         edge_type=torch.cat(
-    #             [
-    #                 trg.target_edge_type,
-    #                 valg.target_edge_type,
-    #                 testg.target_edge_type,
-    #             ]
-    #         ),
-    #         num_nodes=trg.num_nodes,
-    #     )
-    #     for trg, valg, testg in zip(train_data, valid_data, test_data)
-    # ]
+    print(line)
