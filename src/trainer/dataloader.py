@@ -64,6 +64,7 @@ class DataloaderMixin(BaseClass):
             "collate_fn": EvaluateDataset.collate_fn,
             "num_workers": self.args.dataloader_num_workers,
             "pin_memory": self.args.dataloader_pin_memory,
+            "shuffle": False
         }
 
         eval_dataloader = DataLoader(dataset, **dataloader_params)

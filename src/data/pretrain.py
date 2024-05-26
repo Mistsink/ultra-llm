@@ -179,7 +179,9 @@ class PretrainDataset(Dataset):
             _labels=labels,
         )
 
-    def sample_from_edge_index(self, entities: torch.Tensor) -> CustomSubData:
+    def sample_from_edge_index(
+        self, entities: torch.Tensor, return_khop_map: bool = False
+    ) -> CustomSubData:
         """
         edge_index: 2 x n or n
         edge_index 可以不存在，会从这两个点开始采样
@@ -191,7 +193,7 @@ class PretrainDataset(Dataset):
         negative_sampler = None
 
         if entities.shape[0] % 2 != 0:
-            entities = torch.cat([entities, torch.tensor(entities[-1])])
+            entities = torch.cat([entities, torch.tensor([entities[-1]])])
         # edge_index 为 2 x n 的 tensor
         edge_index = entities.view(2, -1)
 
@@ -231,7 +233,52 @@ class PretrainDataset(Dataset):
         sub_g.target_edge_index = sub_g.target_edge_index[:, target_index]
         sub_g.target_edge_type = sub_g.target_edge_type[target_index]
 
+        if return_khop_map:
+            neighbors_map = {}
+            for entity in entities.unique():
+                new_id = new_oriid_idx_map[entity.item()]
+                neighbors_map[new_id] = self.get_neighbors(
+                    new_id, sub_g.edge_index, len(self.cfg.task.num_neighbors)
+                )
+            return sub_g, {
+                "oriid_idx_map": new_oriid_idx_map,
+                "neighbors_map": neighbors_map,
+            }
         return sub_g
+
+    @staticmethod
+    def get_neighbors(node_id, edge_index, k):
+        all_nodes = set()
+        neighbors = []
+        # 存储当前跳数的节点
+        current_nodes = {node_id}
+
+        # 遍历每一跳，直到达到最大跳数
+        for hop in range(k):
+            # 存储下一跳的节点
+            next_nodes = set()
+
+            # 对于当前跳数的每个节点，查找其邻居节点
+            for current_node in current_nodes:
+                # 找到所有与当前节点相连接的节点
+                # 正向
+                connected_nodes = edge_index[1, edge_index[0] == current_node].tolist()
+                next_nodes.update(connected_nodes)
+                # 逆向
+                connected_nodes = edge_index[0, edge_index[1] == current_node].tolist()
+                next_nodes.update(connected_nodes)
+
+            # 排除已经存在于当前节点集合中的节点，以避免重复添加
+            next_nodes -= all_nodes
+
+            # 将下一跳节点添加到邻居节点集合中
+            all_nodes.update(next_nodes)
+            neighbors.append(list(next_nodes))
+
+            # 更新当前跳数节点集合
+            current_nodes = next_nodes
+
+        return neighbors
 
     def insert_super_node(
         self, g: CustomSubDataWithSuperNode

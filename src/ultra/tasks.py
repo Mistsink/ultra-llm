@@ -68,7 +68,8 @@ def negative_sampling(data, batch, num_negative, strict=True, limit_nodes=None):
         if limit_nodes is not None:
             neg_t_index = limit_nodes[neg_t_index]
 
-        h_mask = h_mask[batch_size // 2:]
+        if _bs > 1:
+            h_mask = h_mask[batch_size // 2:]
         if limit_nodes is not None:
             h_mask = h_mask[:, limit_nodes]
         neg_h_candidate = h_mask.nonzero()[:, 1]
