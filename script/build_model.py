@@ -45,6 +45,15 @@ def find_all_linear_names(model: GemmaForCausalLM, cfg: Config):
     return list(lora_module_names)
 
 
+# def find_lm_head_names(model: GemmaForCausalLM):
+#     lora_module_names = set()
+#     for i, layer in enumerate(model.lm_head):
+#         for name, module in layer.named_modules():
+#             if not isinstance(module, cls):
+#                 continue
+#             lora_module_names.add(f"model.layers.{layers_num-ex_layers_num + i}.{name}")
+
+
 def set_requires_grad(
     model: GemmaForCausalLM, module_names: List[str], requires_grad=True
 ):
@@ -129,7 +138,10 @@ def build_model(
     )
 
     if not cfg.model.load_lora:
-        lora_modules = find_all_linear_names(model, cfg)
+        # lora_modules = find_all_linear_names(model, cfg)
+        # print(model)
+        # print(lora_modules)
+        lora_modules = 'model.embed_tokens'
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,

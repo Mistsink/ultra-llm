@@ -101,7 +101,10 @@ class EvaluateDataset(PretrainDataset):
         # TODO FIXME ent_ranges 中没有 subg.n_id 中所有内容
 
         input_ids, labels = LPInstrucDataset.get_labels(
-            mask_triples[0], self.tokenizer, max_length=self.cfg.task.instruct_len
+            mask_triples[0],
+            self.tokenizer,
+            eos_token=self.tokenizer.eos_token,
+            max_length=self.cfg.task.instruct_len,
         )
 
         return PretrainDatasetItemOutput(

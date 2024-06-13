@@ -18,7 +18,7 @@ class GrailInductiveDataset(InMemoryDataset):
         version,
         transform=None,
         pre_transform=build_relation_graph,
-        merge_valid_test=True,
+        merge_valid_test=False,
         text_store: GrailTextStore = None,
     ):
         self.version = version
@@ -812,8 +812,10 @@ class InductiveDataset(InMemoryDataset):
         version,
         transform=None,
         pre_transform=build_relation_graph,
+        text_store: GrailTextStore = None,
         **kwargs,
     ):
+        self.text_store = text_store
 
         self.version = str(version)
         super().__init__(root, transform, pre_transform)
@@ -924,6 +926,13 @@ class InductiveDataset(InMemoryDataset):
         inf_valid_edges = torch.tensor(inf_valid_edges, dtype=torch.long)
         inf_test_edges = torch.tensor(inf_test_edges, dtype=torch.long)
 
+        train_text_data = self.text_store.desc_from_mapping(
+            train_res["inv_entity_vocab"], train_res["inv_rel_vocab"]
+        )
+        test_text_data = self.text_store.desc_from_mapping(
+            inference_res["inv_entity_vocab"], inference_res["inv_rel_vocab"]
+        )
+
         train_data = Data(
             edge_index=train_fact_index,
             edge_type=train_fact_type,
@@ -931,6 +940,7 @@ class InductiveDataset(InMemoryDataset):
             target_edge_index=train_target_edges,
             target_edge_type=train_target_etypes,
             num_relations=num_train_rels * 2,
+            text_data=train_text_data,
         )
         valid_data = Data(
             edge_index=inf_edges if self.valid_on_inf else train_fact_index,
@@ -941,6 +951,7 @@ class InductiveDataset(InMemoryDataset):
             num_relations=(
                 inference_num_rels * 2 if self.valid_on_inf else num_train_rels * 2
             ),
+            text_data=test_text_data if self.valid_on_inf else train_text_data,
         )
         test_data = Data(
             edge_index=inf_edges,
@@ -949,6 +960,7 @@ class InductiveDataset(InMemoryDataset):
             target_edge_index=inf_test_edges[:, :2].T,
             target_edge_type=inf_test_edges[:, 2],
             num_relations=inference_num_rels * 2,
+            text_data=test_text_data,
         )
 
         if self.pre_transform is not None:
@@ -1009,6 +1021,14 @@ class FBIngram(IngramInductive):
         "https://raw.githubusercontent.com/bdi-lab/InGram/master/data/FB-%s/test.txt",
     ]
     name = "fb"
+
+    def __init__(
+        self, root, version, ent_desc_path, ent_short_desc_path, rel_desc_path
+    ):
+        text_store: GrailTextStore = GrailTextStore(
+            ent_desc_path, ent_short_desc_path, rel_desc_path
+        )
+        super().__init__(root, version, text_store=text_store)
 
 
 class WKIngram(IngramInductive):

@@ -17,11 +17,9 @@
         }
     },
     "scheduler": {
-        "type": "WarmupDecayLR",
+        "type": "WarmupCosineLR",
         "params": {
-            "warmup_min_lr": "auto",
-            "warmup_max_lr": "auto",
-            "warmup_num_steps": "auto",
+            "warmup_min_ratio": 0.1,
             "total_num_steps": "auto"
         }
     },
@@ -35,7 +33,7 @@
         "contiguous_gradients": true
     },
     
-    "steps_per_print": 500,
+    "steps_per_print": 200,
     "train_batch_size": "auto",
     "train_micro_batch_size_per_gpu": "auto",
     "wall_clock_breakdown": false

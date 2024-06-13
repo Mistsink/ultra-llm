@@ -13,6 +13,7 @@ if __name__ == "__main__":
 # 对每一个 mask_triple ,构建预测的 prompt:
 #
 
+import random
 import torch
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
@@ -54,7 +55,7 @@ class LPInstrucDataset(Dataset):
 
     @staticmethod
     def get_labels(
-        triples: torch.Tensor, tokenizer: GemmaTokenizer, max_length: int = 512
+        triples: torch.Tensor, tokenizer: GemmaTokenizer, eos_token: str, max_length: int = 512
     ):
         h, t, r = triples[0].tolist()
         pred_tail = torch.all(triples[:, 0] == triples[0, 0])
@@ -70,6 +71,7 @@ class LPInstrucDataset(Dataset):
         prompt, node_ids = LPInstrucDataset._generate_prompt(
             h, r, t, neg_ents, pred_tail=pred_tail
         )
+        prompt += eos_token
 
         # tokenization & labeling
         input_ids, labels = LPInstrucDataset.tokenize(
@@ -95,6 +97,7 @@ class LPInstrucDataset(Dataset):
         # 生成 prompt
         r_emb = self.rel_emb[r].unsqueeze(0)
         prompt, node_ids = self._generate_prompt(h, r, t, neg_ents, pred_tail=pred_tail)
+        prompt += self.tokenizer.eos_token
         node_embs = self.ent_emb[node_ids]
         node_embs = torch.cat([node_embs, r_emb], dim=0)  # num_nodes+1 x dim
 
@@ -149,6 +152,7 @@ Below is the embedding information for all candidate tail entities: """
             exist_ent = t
             suffix = f"We know the embedding information for a missing triplet's tail entity: [ENTITY {t}] {SpecialToken.INFO_NODE.value}, and the embedding information for its relation: [RELATION {r}] {SpecialToken.INFO_NODE.value}. The missing head entity is: [ENTITY {h}]."
 
+        random.shuffle(ents)
         ents_str = f" {SpecialToken.INFO_NODE.value} ".join(
             [f"[ENTITY {ent}]" for ent in ents]
         )

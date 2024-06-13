@@ -32,6 +32,7 @@ class GNNLLMModel(GemmaModel):
 
     def __init__(self, config: GemmaConfig, cfg: Config):
         super().__init__(config)
+        self.cfg = cfg
 
         self.encoder_layers_num = len(self.layers)
         self.interact_layers_num = len(cfg.model.entity_model.hidden_dims)
@@ -52,12 +53,20 @@ class GNNLLMModel(GemmaModel):
             2,
         )
 
-        self.fuse_llm_ent_layer = MLP(
-            config.hidden_size * 2 + cfg.model.entity_model.hidden_dims[-1],
-            config.hidden_size,
-            config.hidden_size,
-            2,
-        )
+        if self.cfg.model.only_llm:
+            self.fuse_llm_ent_layer = MLP(
+                config.hidden_size * 2,
+                config.hidden_size,
+                config.hidden_size,
+                2,
+            )
+        else:
+            self.fuse_llm_ent_layer = MLP(
+                config.hidden_size * 2 + cfg.model.entity_model.hidden_dims[-1],
+                config.hidden_size,
+                config.hidden_size,
+                2,
+            )
 
     def __init_graph_models(self, config: Config) -> GNNModel:
         return GNNModel(config)
@@ -355,7 +364,8 @@ class GNNLLMModel(GemmaModel):
 
             # TODO E-GNN & LLM interaction
             if (
-                model_input is not None
+                not self.cfg.model.only_llm
+                and model_input is not None
                 and model_input.is_ent
                 and i >= self.encoder_layers_num - self.interact_layers_num
             ):
@@ -374,6 +384,8 @@ class GNNLLMModel(GemmaModel):
         # R-GNN & LLM generate rel emb
         if model_input is not None:
             if model_input.is_ent:
+                if self.cfg.model.only_llm:
+                    ent_emb = None
                 ent_emb = self.fuse_llm_ent(model_input, hidden_states, ent_emb)
             else:
                 rel_emb = self.interact_rel_gnn(model_input, hidden_states)
@@ -435,6 +447,11 @@ class GNNLLMModel(GemmaModel):
             boundary[i, model_input.data[i].super_node_id] = hidden_states[
                 i, [model_input.g_begin_idx, model_input.g_end_idx]
             ].view(-1)
+
+        if self.cfg.model.only_llm:
+            # 没有 GNN 模块
+            feat = self.fuse_llm_ent_layer(boundary)
+            return feat
 
         feat = torch.cat([boundary, ent_state], dim=2)
         feat = self.fuse_llm_ent_layer(feat)
@@ -557,6 +574,8 @@ class GNNLLMModel(GemmaModel):
         # 有 Batch, 故 * bs
         # TODO FIXME 这里简单将 原始边的emb作为 逆向边 的特征
         boundary = boundary.repeat(1, 2, 1)
+        if self.cfg.model.only_llm:
+            return boundary
 
         rel_emb = self.graph_model(model_input, boundary=boundary, layer_idx=-1)
 
