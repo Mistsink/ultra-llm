@@ -103,7 +103,9 @@ class GNNLLM(GemmaForCausalLM):
             )
 
             # project rel_emb from gnn_dim into hidden_dim
+            residual = rel_out.rel_emb
             rel_out.rel_emb = self.proj_rel_layer(rel_out.rel_emb)
+            rel_out.rel_emb = rel_out.rel_emb + residual
 
             return GNNLLMOutput(ent_emb=ent_out.ent_emb, rel_emb=rel_out.rel_emb)
 

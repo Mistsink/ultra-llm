@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Optional
 from torch.utils.data import DataLoader, Dataset
 from transformers import Trainer
 
+from src.data.instruction_llm_match import LLMMatchInstrucDataset
 from src.data.evaluate import EvaluateDataset
 from src.data.instruction import LPInstrucDataset
 from src.data.types import PretrainDatasetOutput
@@ -72,14 +73,24 @@ class DataloaderMixin(BaseClass):
         return self.accelerator.prepare(eval_dataloader)
     
     def get_instruct_dataloader(self, inputs: PretrainDatasetOutput, outputs: GNNLLMOutput) -> DataLoader:
-        dataset = LPInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len)
+        if not self.cfg.model.only_llm:
+            dataset = LPInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len)
 
-        dataloader_params = {
-            "batch_size": self.cfg.train.instruct_batch_size,
-            "collate_fn": LPInstrucDataset.collate_fn,
-            "num_workers": 0,
-            "pin_memory": False,
-        }
+            dataloader_params = {
+                "batch_size": self.cfg.train.instruct_batch_size,
+                "collate_fn": LPInstrucDataset.collate_fn,
+                "num_workers": 0,
+                "pin_memory": False,
+            }
+        else:
+            dataset = LLMMatchInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len)
+
+            dataloader_params = {
+                "batch_size": self.cfg.train.instruct_batch_size,
+                "collate_fn": LLMMatchInstrucDataset.collate_fn,
+                "num_workers": 0,
+                "pin_memory": False,
+            }
 
         # We use the same batch_size as for eval.
         # return self.accelerator.prepare(DataLoader(dataset, **dataloader_params))

@@ -387,8 +387,10 @@ class GNNLLMModel(GemmaModel):
                 if self.cfg.model.only_llm:
                     ent_emb = None
                 ent_emb = self.fuse_llm_ent(model_input, hidden_states, ent_emb)
+                ent_emb = self.norm(ent_emb)    # 使用LLM 的 Norm
             else:
                 rel_emb = self.interact_rel_gnn(model_input, hidden_states)
+                rel_emb = self.norm(rel_emb)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:

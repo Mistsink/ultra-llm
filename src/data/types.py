@@ -47,6 +47,10 @@ class PretrainDatasetItemOutput:
 
     _labels: Optional[torch.Tensor]=None
 
+    # for debug
+    ht_id: Optional[list[int]]=None
+    neg_t_ids: Optional[list[int]]=None
+
 
 @dataclass
 class PretrainDatasetOutput:

@@ -1,6 +1,5 @@
 from typing import Dict
 import numpy as np
-import evaluate
 import torch
 from transformers import EvalPrediction, AutoTokenizer
 from sklearn.metrics import f1_score
