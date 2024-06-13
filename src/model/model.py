@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 import torch
 import torch.nn as nn
-from transformers import GemmaForCausalLM, GemmaTokenizer, GemmaConfig
+from transformers import GemmaForCausalLM, GemmaTokenizer, GemmaConfig, AutoModelForCausalLM, LlamaForCausalLM, LlamaConfig
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
     BaseModelOutputWithPast,
@@ -22,10 +22,13 @@ class GNNLLMOutput(CausalLMOutputWithPast):
     rel_emb: Optional[torch.Tensor] = None
 
 
-class GNNLLM(GemmaForCausalLM):
+class GNNLLM(LlamaForCausalLM):
     config_class = GNNLLMConfig
-    def __init__(self, config: GemmaConfig, cfg: Config):
+    def __init__(self, config: LlamaConfig, cfg: Config):
         super().__init__(config)
+
+        self.dummy_layer = nn.Linear(3, 3, bias=False)
+
         self.model = GNNLLMModel(config, cfg=cfg)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
@@ -42,7 +45,7 @@ class GNNLLM(GemmaForCausalLM):
 
     def init_graph_tokenizer(self, tokenizer: GemmaTokenizer, num_new_tokens: int):
         self.model.init_graph_tokenizer(tokenizer, num_new_tokens)
-        self.resize_token_embeddings(len(tokenizer))
+        # self.resize_token_embeddings(len(tokenizer))
 
     def forward(
         self,
@@ -105,7 +108,7 @@ class GNNLLM(GemmaForCausalLM):
             # project rel_emb from gnn_dim into hidden_dim
             residual = rel_out.rel_emb
             rel_out.rel_emb = self.proj_rel_layer(rel_out.rel_emb)
-            rel_out.rel_emb = rel_out.rel_emb + residual
+            # rel_out.rel_emb = rel_out.rel_emb + residual
 
             return GNNLLMOutput(ent_emb=ent_out.ent_emb, rel_emb=rel_out.rel_emb)
 
@@ -144,7 +147,7 @@ class GNNLLM(GemmaForCausalLM):
             shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
             loss_fct = nn.CrossEntropyLoss()
-            shift_logits = shift_logits.view(-1, self.config.vocab_size)
+            shift_logits = shift_logits.view(-1, self.lm_head.out_features) # 原始是用 self.config.vocab_size，这里我调整了词表大小，但不会更新，所以 lm_head 也不需要更新
             shift_labels = shift_labels.view(-1)
             # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)

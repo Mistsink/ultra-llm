@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Optional
 from torch.utils.data import DataLoader, Dataset
 from transformers import Trainer
 
+from src.data.evaluate_llm_match import EvaluateLLMMatchEmbDataset
 from src.data.instruction_llm_match import LLMMatchInstrucDataset
 from src.data.evaluate import EvaluateDataset
 from src.data.instruction import LPInstrucDataset
@@ -58,15 +59,26 @@ class DataloaderMixin(BaseClass):
         pprint(kwargs)
 
     def get_test_dataloader(self, test_dataset: Optional[Dataset] = None) -> DataLoader:
-        dataset = EvaluateDataset(test_dataset, self.tokenizer, self.cfg)
+        if not self.cfg.model.only_llm:
+            dataset = EvaluateDataset(test_dataset, self.tokenizer, self.cfg)
 
-        dataloader_params = {
-            "batch_size": self.args.eval_batch_size,
-            "collate_fn": EvaluateDataset.collate_fn,
-            "num_workers": self.args.dataloader_num_workers,
-            "pin_memory": self.args.dataloader_pin_memory,
-            "shuffle": False
-        }
+            dataloader_params = {
+                "batch_size": self.args.eval_batch_size,
+                "collate_fn": EvaluateDataset.collate_fn,
+                "num_workers": self.args.dataloader_num_workers,
+                "pin_memory": self.args.dataloader_pin_memory,
+                "shuffle": False
+            }
+        else:
+            dataset = EvaluateLLMMatchEmbDataset(test_dataset, self.tokenizer, self.cfg)
+
+            dataloader_params = {
+                "batch_size": self.args.eval_batch_size,
+                "collate_fn": EvaluateLLMMatchEmbDataset.collate_fn,
+                "num_workers": self.args.dataloader_num_workers,
+                "pin_memory": self.args.dataloader_pin_memory,
+                "shuffle": False
+            }
 
         eval_dataloader = DataLoader(dataset, **dataloader_params)
 

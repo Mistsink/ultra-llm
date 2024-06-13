@@ -13,8 +13,21 @@ class ModelDetailConfig:
     input_dim: int = field(default=768)
     hidden_dims: List[int] = field(default_factory=lambda: [768])
 
+    def to_dict(self):
+        return {
+            "class_name": self.class_name,
+            "message_func": self.message_func,
+            "aggregate_func": self.aggregate_func,
+            "short_cut": self.short_cut,
+            "layer_norm": self.layer_norm,
+            "input_dim": self.input_dim,
+            "hidden_dims": self.hidden_dims,
+        }
+
+
 @dataclass
 class ModelConfig:
+    use_peft: bool = field(default=True)
     load_lora: bool = field(default=False)
     only_llm: bool = field(default=False)
     class_name: str = field(default="GemmaForCausalLM")
@@ -31,12 +44,32 @@ class ModelConfig:
         self.relation_model = ModelDetailConfig(**kwargs.get("relation_model", {}))
         self.entity_model = ModelDetailConfig(**kwargs.get("entity_model", {}))
 
+    def to_dict(self):
+        return {
+            "use_peft": self.use_peft,
+            "load_lora": self.load_lora,
+            "only_llm": self.only_llm,
+            "class_name": self.class_name,
+            "llm_name": self.llm_name,
+            "cache_dir": self.cache_dir,
+            "hf_token": self.hf_token,
+            "relation_model": self.relation_model.to_dict(),
+            "entity_model": self.entity_model.to_dict(),
+        }
+
 
 @dataclass
 class DatasetConfig:
     class_name: str = field(default="KGLLMData")
     root: str = field(default="")
     extra_params: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self):
+        return {
+            "class_name": self.class_name,
+            "root": self.root,
+            "extra_params": self.extra_params,
+        }
 
 
 @dataclass
@@ -51,11 +84,27 @@ class TaskConfig:
     num_mask: int = field(default=64)
     num_neighbors: list[int] = field(default_factory=lambda: [-1, 50])
 
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "strict_negative": self.strict_negative,
+            "adversarial_temperature": self.adversarial_temperature,
+            "metric": self.metric,
+            "num_negative": self.num_negative,
+            "instruct_len": self.instruct_len,
+            "prompt_len": self.prompt_len,
+            "num_mask": self.num_mask,
+            "num_neighbors": self.num_neighbors,
+        }
+
 
 @dataclass
 class OptimizerConfig:
     class_name: str = field(default="AdamW")
     lr: float = field(default=5e-5)
+
+    def to_dict(self):
+        return {"class_name": self.class_name, "lr": self.lr}
 
 @dataclass
 class TrainConfig(TrainingArguments):
@@ -71,14 +120,18 @@ class TrainConfig(TrainingArguments):
     num_train_epochs: int = field(default=10)
     fast_test: int = field(default=-1)
 
-    evaluation_strategy: str = field(default="epoch")
-    save_strategy: str = field(default="epoch") # steps / epoch
+    eval_strategy: str = field(default="epoch")
+    save_strategy: str = field(default="epoch")  # steps / epoch
     save_steps: int = field(default=1000)
     metric_for_best_model: Optional[str] = field(
-        default=None, metadata={"help": "The metric to use to compare two different models."}
+        default=None,
+        metadata={"help": "The metric to use to compare two different models."},
     )
     greater_is_better: Optional[bool] = field(
-        default=None, metadata={"help": "Whether the `metric_for_best_model` should be maximized or not."}
+        default=None,
+        metadata={
+            "help": "Whether the `metric_for_best_model` should be maximized or not."
+        },
     )
 
 
@@ -100,3 +153,12 @@ class Config:
         self.task = TaskConfig(**kwargs.get("task", {}))
         self.optimizer = OptimizerConfig(**kwargs.get("optimizer", {}))
 
+    def to_dict(self):
+        return {
+            "dataset": self.dataset.to_dict(),
+            "model": self.model.to_dict(),
+            "task": self.task.to_dict(),
+            "optimizer": self.optimizer.to_dict(),
+            "train": self.train.to_dict(),
+        }
+    

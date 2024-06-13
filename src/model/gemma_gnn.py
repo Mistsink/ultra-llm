@@ -5,12 +5,16 @@ import torch.nn as nn
 from transformers import (
     GemmaForCausalLM,
     LlamaForCausalLM,
+    AutoModel,
+    LlamaModel,
+    LlamaConfig,
     GemmaModel,
     GemmaConfig,
     GemmaTokenizer,
 )
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.gemma.modeling_gemma import logger
+from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from transformers.cache_utils import StaticCache, DynamicCache, Cache
 
 from config.config import Config
@@ -27,10 +31,10 @@ class GNNLLMModelOutput(BaseModelOutputWithPast):
     rel_emb: Optional[torch.Tensor] = None
 
 
-class GNNLLMModel(GemmaModel):
+class GNNLLMModel(LlamaModel):
     config_class = GNNLLMConfig
 
-    def __init__(self, config: GemmaConfig, cfg: Config):
+    def __init__(self, config: LlamaConfig, cfg: Config):
         super().__init__(config)
         self.cfg = cfg
 
@@ -60,6 +64,7 @@ class GNNLLMModel(GemmaModel):
                 config.hidden_size,
                 2,
             )
+            self.rel_norm = LlamaRMSNorm(cfg.model.relation_model.input_dim, config.rms_norm_eps)
         else:
             self.fuse_llm_ent_layer = MLP(
                 config.hidden_size * 2 + cfg.model.entity_model.hidden_dims[-1],
@@ -67,6 +72,9 @@ class GNNLLMModel(GemmaModel):
                 config.hidden_size,
                 2,
             )
+            self.rel_norm = LlamaRMSNorm(cfg.model.relation_model.hidden_dims[-1], config.rms_norm_eps)
+
+        self.ent_norm = LlamaRMSNorm(config.hidden_size, config.rms_norm_eps)
 
     def __init_graph_models(self, config: Config) -> GNNModel:
         return GNNModel(config)
@@ -128,10 +136,11 @@ class GNNLLMModel(GemmaModel):
         past_key_values,
         cache_position,
         position_ids,
+        output_attentions,
         model_input: Optional[ModelInput] = None,
         embeds: Optional[torch.FloatTensor] = None,
     ):
-        output_attentions = self.config.output_attentions
+        output_attentions = self.config.output_attentions if output_attentions is None else output_attentions
         output_hidden_states = self.config.output_hidden_states
         use_cache = self.config.use_cache
         return_dict = self.config.use_return_dict
@@ -181,7 +190,7 @@ class GNNLLMModel(GemmaModel):
             position_ids = cache_position.unsqueeze(0)
 
         causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_seen_tokens
+            attention_mask, inputs_embeds, cache_position, past_key_values=past_key_values, output_attentions=output_attentions
         )
 
         normalizer = torch.tensor(
@@ -277,6 +286,7 @@ class GNNLLMModel(GemmaModel):
             past_key_values,
             cache_position,
             position_ids,
+            output_attentions,
             model_input=model_input,
             embeds=embeds,
         )
@@ -387,10 +397,19 @@ class GNNLLMModel(GemmaModel):
                 if self.cfg.model.only_llm:
                     ent_emb = None
                 ent_emb = self.fuse_llm_ent(model_input, hidden_states, ent_emb)
-                ent_emb = self.norm(ent_emb)    # 使用LLM 的 Norm
+                while torch.isnan(self.ent_norm.weight).any():
+                    self.ent_norm = LlamaRMSNorm(self.config.hidden_size, self.config.rms_norm_eps).to(device=self.device, dtype=ent_emb.dtype)
+                ent_emb = self.ent_norm(ent_emb)    # 使用LLM 的 Norm
             else:
                 rel_emb = self.interact_rel_gnn(model_input, hidden_states)
-                rel_emb = self.norm(rel_emb)
+                while torch.isnan(self.rel_norm.weight).any():
+                    if self.cfg.model.only_llm:
+                        self.rel_norm = LlamaRMSNorm(self.cfg.model.relation_model.input_dim, self.config.rms_norm_eps).to(device=self.device, dtype=rel_emb.dtype)
+                    else:
+                        self.rel_norm = LlamaRMSNorm(self.cfg.model.relation_model.hidden_dims[-1], self.config.rms_norm_eps).to(device=self.device, dtype=rel_emb.dtype)
+
+
+                rel_emb = self.rel_norm(rel_emb)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:

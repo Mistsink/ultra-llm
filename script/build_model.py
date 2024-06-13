@@ -55,8 +55,13 @@ def find_all_linear_names(model: GemmaForCausalLM, cfg: Config):
 
 
 def set_requires_grad(
-    model: GemmaForCausalLM, module_names: List[str], requires_grad=True
+    model: GemmaForCausalLM, module_names: List[str] | str, requires_grad=True
 ):
+    if module_names == '*':
+        for name, module in model.named_modules():
+            for param in module.parameters():
+                param.requires_grad = requires_grad
+
     for name, module in model.named_modules():
         if any([n in name for n in module_names]):
             for param in module.parameters():
@@ -73,7 +78,8 @@ def build_tokenizer(cfg: Config) -> GemmaTokenizer:
             local_files_only=True
         )
     elif "llama" in cfg.model.llm_name:
-        tokenizer = LlamaTokenizer.from_pretrained(
+        # LLaMA3 后暂不能使用 LlamaTokenizer 构建
+        tokenizer = AutoTokenizer.from_pretrained(
             cfg.model.llm_name,
             cache_dir=cfg.model.cache_dir,
             token=cfg.model.hf_token,
@@ -89,6 +95,10 @@ def build_tokenizer(cfg: Config) -> GemmaTokenizer:
         # )
         raise ValueError(f"Invalid LLM name: {cfg.model.llm_name}")
 
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
     return tokenizer
 
 
@@ -96,7 +106,7 @@ def build_model(
     cfg: Config, tokenizer: AutoTokenizer, num_new_tokens: int
 ) -> PeftModel:
     custom_layers = [
-        "lm_head",
+        # "lm_head",
         "graph_model",
         "exchange_info_layer",
         "fushion_layer",
@@ -105,6 +115,8 @@ def build_model(
         "llm_to_ent_layer",
         "fuse_llm_ent_layer",
         "proj_rel_layer",
+        "rel_norm",
+        "ent_norm",
     ]
 
     bnb_config = BitsAndBytesConfig(
@@ -137,11 +149,17 @@ def build_model(
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
 
+    # if not cfg.model.use_peft:
+    #     set_requires_grad(model, '*', requires_grad=False)
+    #     set_requires_grad(model, custom_layers, requires_grad=True)
+    #     return model
+
     if not cfg.model.load_lora:
         # lora_modules = find_all_linear_names(model, cfg)
         # print(model)
         # print(lora_modules)
-        lora_modules = 'model.embed_tokens'
+        # lora_modules = 'model.embed_tokens'
+        lora_modules = 'dummy_layer'
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,

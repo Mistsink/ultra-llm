@@ -61,7 +61,7 @@ def get_data(cfg: Config) -> tuple[InMemoryDataset, CustomData, CustomData, Cust
 
 if __name__ == "__main__":
 
-    cfg = parse_args("config/pretrain/pretrain_0.yaml")
+    cfg = parse_args("config/pretrain/train_llm_match.yaml")
     transformers.set_seed(cfg.train.seed)
 
     task_name = cfg.task.name

@@ -94,7 +94,7 @@ class LLMMatchInstrucDataset(Dataset):
         prompt, node_ids = self._generate_prompt(h, r, t, neg_ents, pred_tail=pred_tail)
         prompt += self.tokenizer.eos_token
         node_embs = self.ent_emb[node_ids]
-        node_embs = torch.cat([node_embs, r_emb], dim=0)  # num_nodes+1 x dim
+        # node_embs = torch.cat([node_embs, r_emb], dim=0)  # num_nodes+1 x dim
 
         # tokenization & labeling
         input_ids, labels = self.tokenize(

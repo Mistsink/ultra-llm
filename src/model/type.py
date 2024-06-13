@@ -1,5 +1,5 @@
-from transformers import GemmaConfig
+from transformers import GemmaConfig, LlamaConfig
 
 
-class GNNLLMConfig(GemmaConfig):
+class GNNLLMConfig(LlamaConfig):
     model_type = "GNNLLM"
