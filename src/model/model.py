@@ -70,25 +70,28 @@ class GNNLLM(LlamaForCausalLM):
             # As encoder
 
             # First: encode rel emb
-            rel_input = ModelInput.rel_from_pretrain_output(data)
-            rel_out: GNNLLMModelOutput = self.model(
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                cache_position=cache_position,
-                # Valid vars
-                input_ids=rel_input.prompt,
-                model_input=rel_input,
-            )
+            # rel_input = ModelInput.rel_from_pretrain_output(data)
+            # rel_out: GNNLLMModelOutput = self.model(
+            #     attention_mask=attention_mask,
+            #     position_ids=position_ids,
+            #     past_key_values=past_key_values,
+            #     inputs_embeds=inputs_embeds,
+            #     use_cache=use_cache,
+            #     output_attentions=output_attentions,
+            #     output_hidden_states=output_hidden_states,
+            #     return_dict=return_dict,
+            #     cache_position=cache_position,
+            #     # Valid vars
+            #     input_ids=rel_input.prompt,
+            #     model_input=rel_input,
+            # )
 
             # Second: encode ent emb
+            # ent_input = ModelInput.ent_from_pretrain_output(
+            #     data, rel_emb=rel_out.rel_emb
+            # )
             ent_input = ModelInput.ent_from_pretrain_output(
-                data, rel_emb=rel_out.rel_emb
+                data, rel_emb=None
             )
             ent_out: GNNLLMModelOutput = self.model(
                 attention_mask=attention_mask,
@@ -106,11 +109,10 @@ class GNNLLM(LlamaForCausalLM):
             )
 
             # project rel_emb from gnn_dim into hidden_dim
-            residual = rel_out.rel_emb
-            rel_out.rel_emb = self.proj_rel_layer(rel_out.rel_emb)
-            # rel_out.rel_emb = rel_out.rel_emb + residual
+            # rel_out.rel_emb = self.proj_rel_layer(rel_out.rel_emb)
 
-            return GNNLLMOutput(ent_emb=ent_out.ent_emb, rel_emb=rel_out.rel_emb)
+            # return GNNLLMOutput(ent_emb=ent_out.ent_emb, rel_emb=rel_out.rel_emb)
+            return GNNLLMOutput(ent_emb=ent_out.ent_emb, rel_emb=None)
 
         else:
             assert embeds is not None, "embeds must be provided when data is None, as to model is a decoder"

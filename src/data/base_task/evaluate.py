@@ -3,7 +3,7 @@ from typing import Optional
 import torch
 from torch_geometric.data import Data
 
-from src.data.instruction_llm_match import LLMMatchInstrucDataset
+from src.data.base_task.instruction import BaseTaskInstrucDataset
 from src.data.instruction import LPInstrucDataset
 from src.data.types import PretrainDatasetItemOutput
 from src.data.pretrain import PretrainDataset
@@ -11,7 +11,7 @@ from src.ultra import tasks
 from src.data.special_tokens import SpecialToken
 
 
-class EvaluateLLMMatchEmbDataset(PretrainDataset):
+class EvaluateBaseTaskDataset(PretrainDataset):
     """
     测试 LLM 是否具识别 "ID1: <emb> ID2: <emb>" 中各位置 emb 对应各ID的能力
     """
@@ -81,13 +81,14 @@ class EvaluateLLMMatchEmbDataset(PretrainDataset):
         relg_prompt, rel_ids = self.create_prompt(relg, "relation")
 
         pred_tail = torch.all(mask_triples[0, :, 0] == mask_triples[0, 0, 0])
-        entg_prompt, ent_ids = self.create_prompt(
+        entg_prompt, ent_ids, id_text_map = self.create_prompt(
             subg,
             "entity",
             ht_id=ht_id,
             neg_t_ids=neg_t_ids,
             neighbors_map=neighbors_map,
-            pref_tail=pred_tail,
+            pred_tail=pred_tail,
+            return_text_map=True
         )
         prompt_ids = self.tokenize([relg_prompt, entg_prompt])
 
@@ -104,11 +105,12 @@ class EvaluateLLMMatchEmbDataset(PretrainDataset):
 
         # TODO FIXME ent_ranges 中没有 subg.n_id 中所有内容
 
-        input_ids, labels = LLMMatchInstrucDataset.get_labels(
+        input_ids, labels = BaseTaskInstrucDataset.get_labels(
             mask_triples[0],
             self.tokenizer,
             eos_token=self.tokenizer.eos_token,
             max_length=self.cfg.task.instruct_len,
+            id_text_map=id_text_map,
         )
 
         return PretrainDatasetItemOutput(
@@ -123,6 +125,7 @@ class EvaluateLLMMatchEmbDataset(PretrainDataset):
             ent_end_idx=ent_end_idx,
             ent_ranges=ent_ranges,
             _labels=labels,
+            _id_text_map=id_text_map
         )
 
     def mask_edges(self, subg, triples=None):
@@ -161,7 +164,8 @@ class EvaluateLLMMatchEmbDataset(PretrainDataset):
         ht_id: Optional[list[int]] = None,
         neg_t_ids: Optional[list[int]] = None,
         neighbors_map: Optional[dict[int, list[list[int]]]] = None,
-        pref_tail: Optional[bool] = None,
+        pred_tail: Optional[bool] = None,
+        return_text_map=False
     ) -> tuple[str, list[int]]:
         """
         根据 graph 中的 node, 构建 prompt
@@ -174,7 +178,7 @@ class EvaluateLLMMatchEmbDataset(PretrainDataset):
             ht_id is not None
             and neg_t_ids is not None
             and neighbors_map is not None
-            and pref_tail is not None
+            and pred_tail is not None
         ), "entity mode must input ht_id, neg_t_ids, neighbors_map, pref_tail params in EVAL_STAGE"
 
         prefix = """Below, I will provide a description document of a Knowledge Graph (KG), showcasing the text information for some nodes within this KG. It will be presented in a specific format:
@@ -188,13 +192,15 @@ Example:
 Next, I will provide an actual description of a KG:
 """
 
+        text_map = {}
+
         id_oriid_map = g.n_id.tolist()
         descs = self.data.text_data.ent_desc
 
         items: list[list[tuple[str, int]]] = []
         n_records = set()
 
-        if pref_tail:
+        if pred_tail:
             known_ht_id = ht_id[0]
             unknown_ht_id = ht_id[1]
         else:
@@ -212,6 +218,7 @@ Next, I will provide an actual description of a KG:
             )
         )
         n_records.add(known_ht_id)
+        text_map[known_ht_id] = descs[id_oriid_map[known_ht_id]][0]
         _items.append(
             (
                 f"[ENTITY {unknown_ht_id}] {descs[id_oriid_map[unknown_ht_id]][0]}",
@@ -219,12 +226,14 @@ Next, I will provide an actual description of a KG:
             )
         )
         n_records.add(unknown_ht_id)
+        text_map[unknown_ht_id] = descs[id_oriid_map[unknown_ht_id]][0]
         #   neg_t
         for _id in neg_t_ids:
             if _id in n_records:
                 continue
             _items.append((f"[ENTITY {_id}] {descs[id_oriid_map[_id]][0]}", _id))
             n_records.add(_id)
+            text_map[_id] = descs[id_oriid_map[_id]][0]
         random.shuffle(_items)
         items.append(_items)
 
@@ -260,10 +269,14 @@ Next, I will provide an actual description of a KG:
         # flat
         items = [i for _items in items for i in _items]
 
-        return prefix + SpecialToken.G_BEGIN.value + " " + " ".join(
+        prompt = prefix + SpecialToken.G_BEGIN.value + " " + " ".join(
             [i[0] for i in items]
-        ) + " " + SpecialToken.G_END.value, [i[1] for i in items]
+        ) + " " + SpecialToken.G_END.value
 
+        node_ids = [i[1] for i in items]
 
-if __name__ == "__main__":
-    e_data = EvaluateDataset()
+        if return_text_map:
+            return prompt, node_ids, text_map
+
+        return prompt, node_ids
+

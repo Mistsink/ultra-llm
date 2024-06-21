@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import (
     GemmaForCausalLM,
     LlamaForCausalLM,
@@ -64,7 +65,9 @@ class GNNLLMModel(LlamaModel):
                 config.hidden_size,
                 2,
             )
-            self.rel_norm = LlamaRMSNorm(cfg.model.relation_model.input_dim, config.rms_norm_eps)
+            self.rel_norm = LlamaRMSNorm(
+                cfg.model.relation_model.input_dim, config.rms_norm_eps
+            )
         else:
             self.fuse_llm_ent_layer = MLP(
                 config.hidden_size * 2 + cfg.model.entity_model.hidden_dims[-1],
@@ -72,9 +75,16 @@ class GNNLLMModel(LlamaModel):
                 config.hidden_size,
                 2,
             )
-            self.rel_norm = LlamaRMSNorm(cfg.model.relation_model.hidden_dims[-1], config.rms_norm_eps)
+            self.rel_norm = LlamaRMSNorm(
+                cfg.model.relation_model.hidden_dims[-1], config.rms_norm_eps
+            )
 
         self.ent_norm = LlamaRMSNorm(config.hidden_size, config.rms_norm_eps)
+
+        # 用于将融合后的 ent_emb 映射到原始 token 的 emb by gumble softmax
+        self.fused_ent_token_to_ori_token = nn.Linear(
+            config.hidden_size, config.vocab_size
+        )
 
     def __init_graph_models(self, config: Config) -> GNNModel:
         return GNNModel(config)
@@ -140,7 +150,11 @@ class GNNLLMModel(LlamaModel):
         model_input: Optional[ModelInput] = None,
         embeds: Optional[torch.FloatTensor] = None,
     ):
-        output_attentions = self.config.output_attentions if output_attentions is None else output_attentions
+        output_attentions = (
+            self.config.output_attentions
+            if output_attentions is None
+            else output_attentions
+        )
         output_hidden_states = self.config.output_hidden_states
         use_cache = self.config.use_cache
         return_dict = self.config.use_return_dict
@@ -190,7 +204,11 @@ class GNNLLMModel(LlamaModel):
             position_ids = cache_position.unsqueeze(0)
 
         causal_mask = self._update_causal_mask(
-            attention_mask, inputs_embeds, cache_position, past_key_values=past_key_values, output_attentions=output_attentions
+            attention_mask,
+            inputs_embeds,
+            cache_position,
+            past_key_values=past_key_values,
+            output_attentions=output_attentions,
         )
 
         normalizer = torch.tensor(
@@ -240,6 +258,17 @@ class GNNLLMModel(LlamaModel):
         将 info token 的 emb 替换为可学习的 embeds 中的 emb
         :return: replaced inputs_embeds
         """
+
+        # TODO 是否有专门的 Linear 分别处理 ent、rel
+        # embeds 转换成离散的 emb_tokens 的加权组合
+        # 使用 gumble softmax 来实现
+        logits = self.fused_ent_token_to_ori_token(embeds)
+        # logits: (1, num_tokens, vocab_size)
+        # 从 logits 中采样出 token
+        # hard = True 时，采样出的 token 是 one-hot 的, hard = False 时，采样出的 token 是 softmax 的
+        logits = F.gumbel_softmax(logits, hard=False)
+        embeds = torch.matmul(logits, self.embed_tokens.weight)
+
         for i in range(input_ids.size(0)):
             _input_ids = input_ids[i]
             _inputs_embed = inputs_embeds[i]
@@ -398,16 +427,23 @@ class GNNLLMModel(LlamaModel):
                     ent_emb = None
                 ent_emb = self.fuse_llm_ent(model_input, hidden_states, ent_emb)
                 while torch.isnan(self.ent_norm.weight).any():
-                    self.ent_norm = LlamaRMSNorm(self.config.hidden_size, self.config.rms_norm_eps).to(device=self.device, dtype=ent_emb.dtype)
-                ent_emb = self.ent_norm(ent_emb)    # 使用LLM 的 Norm
+                    self.ent_norm = LlamaRMSNorm(
+                        self.config.hidden_size, self.config.rms_norm_eps
+                    ).to(device=self.device, dtype=ent_emb.dtype)
+                ent_emb = self.ent_norm(ent_emb)  # 使用LLM 的 Norm
             else:
                 rel_emb = self.interact_rel_gnn(model_input, hidden_states)
                 while torch.isnan(self.rel_norm.weight).any():
                     if self.cfg.model.only_llm:
-                        self.rel_norm = LlamaRMSNorm(self.cfg.model.relation_model.input_dim, self.config.rms_norm_eps).to(device=self.device, dtype=rel_emb.dtype)
+                        self.rel_norm = LlamaRMSNorm(
+                            self.cfg.model.relation_model.input_dim,
+                            self.config.rms_norm_eps,
+                        ).to(device=self.device, dtype=rel_emb.dtype)
                     else:
-                        self.rel_norm = LlamaRMSNorm(self.cfg.model.relation_model.hidden_dims[-1], self.config.rms_norm_eps).to(device=self.device, dtype=rel_emb.dtype)
-
+                        self.rel_norm = LlamaRMSNorm(
+                            self.cfg.model.relation_model.hidden_dims[-1],
+                            self.config.rms_norm_eps,
+                        ).to(device=self.device, dtype=rel_emb.dtype)
 
                 rel_emb = self.rel_norm(rel_emb)
 

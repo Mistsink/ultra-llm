@@ -14,7 +14,6 @@ import bitsandbytes as bnb
 
 from src.model.model import GNNLLM, TestModel
 from src.data.special_tokens import SpecialToken
-from src.ultra.models import Ultra
 from config.config import Config
 
 from peft import (
@@ -117,6 +116,7 @@ def build_model(
         "proj_rel_layer",
         "rel_norm",
         "ent_norm",
+        "fused_ent_token_to_ori_token",
     ]
 
     bnb_config = BitsAndBytesConfig(
@@ -149,10 +149,10 @@ def build_model(
         gradient_checkpointing_kwargs={"use_reentrant": False},
     )
 
-    # if not cfg.model.use_peft:
-    #     set_requires_grad(model, '*', requires_grad=False)
-    #     set_requires_grad(model, custom_layers, requires_grad=True)
-    #     return model
+    if not cfg.model.use_peft:
+        set_requires_grad(model, '*', requires_grad=False)
+        set_requires_grad(model, custom_layers, requires_grad=True)
+        return model
 
     if not cfg.model.load_lora:
         # lora_modules = find_all_linear_names(model, cfg)

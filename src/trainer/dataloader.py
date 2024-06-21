@@ -3,8 +3,9 @@ from typing import TYPE_CHECKING, Optional
 from torch.utils.data import DataLoader, Dataset
 from transformers import Trainer
 
-from src.data.evaluate_llm_match import EvaluateLLMMatchEmbDataset
-from src.data.instruction_llm_match import LLMMatchInstrucDataset
+from src.data.base_task.instruction import BaseTaskInstrucDataset
+from src.data.llm_match.evaluate_llm_match import EvaluateLLMMatchEmbDataset
+from src.data.llm_match.instruction_llm_match import LLMMatchInstrucDataset
 from src.data.evaluate import EvaluateDataset
 from src.data.instruction import LPInstrucDataset
 from src.data.types import PretrainDatasetOutput
@@ -95,11 +96,11 @@ class DataloaderMixin(BaseClass):
                 "pin_memory": False,
             }
         else:
-            dataset = LLMMatchInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len)
+            dataset = BaseTaskInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len, id_text_maps=inputs._id_text_maps)
 
             dataloader_params = {
                 "batch_size": self.cfg.train.instruct_batch_size,
-                "collate_fn": LLMMatchInstrucDataset.collate_fn,
+                "collate_fn": BaseTaskInstrucDataset.collate_fn,
                 "num_workers": 0,
                 "pin_memory": False,
             }

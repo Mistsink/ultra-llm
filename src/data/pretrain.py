@@ -154,10 +154,12 @@ class PretrainDataset(Dataset):
         ent_end_idx = torch.tensor([i.ent_end_idx for i in batch])
         ent_ranges = [i.ent_ranges for i in batch]
 
-        labels = []
+        labels, id_text_maps = [], []
         for i in batch:
             if i._labels is not None:
                 labels.append(i._labels)
+            if i._id_text_map is not None:
+                id_text_maps.append(i._id_text_map)
 
         if len(labels) == 0:
             labels = None
@@ -177,6 +179,7 @@ class PretrainDataset(Dataset):
             ent_end_idx=ent_end_idx,
             ent_ranges=ent_ranges,
             _labels=labels,
+            _id_text_maps=id_text_maps,
         )
 
     def sample_from_edge_index(
@@ -310,7 +313,9 @@ class PretrainDataset(Dataset):
         g.num_edge_types = g.super_edge_type.max().item() + 1
         return g
 
-    def create_prompt(self, g: Data, mode: str) -> tuple[str, list[int]]:
+    def create_prompt(
+        self, g: Data, mode: str, return_text_map=False
+    ) -> tuple[str, list[int]]:
         """
         根据 graph 中的 node, 构建 prompt
         """
@@ -326,13 +331,17 @@ Example:
 
 Next, I will provide an actual description of a KG:
 """
+        text_map = {}
+
         items: list[tuple[str, int]] = []
         if mode == "entity":
             descs = self.data.text_data.ent_desc
             # entity id 不会因为 构建逆向边 而增加
             # 这里使用 子图中的id写入 prompt，而不是全图的id
             for new_id, i in enumerate(g.n_id.cpu().tolist()):
-                items.append((f"[ENTITY {new_id}] {descs[i][0]}", new_id))
+                desc = descs[i][0]
+                items.append((f"[ENTITY {new_id}] {desc}", new_id))
+                text_map[new_id] = desc
         else:
             descs = self.data.text_data.rel_desc
             # relation id 会因为 构建逆向边 而增加 2 倍
@@ -341,13 +350,26 @@ Next, I will provide an actual description of a KG:
                 g.num_nodes % 2 == 0
             ), "relation graph should have even number of nodes"
             for i in range(g.num_nodes // 2):
-                items.append((f"[RELATION {i}] {descs[i][0]}", i))
+                desc = descs[i][0]
+                items.append((f"[RELATION {i}] {desc}", i))
+                text_map[new_id] = desc
 
         # shuffle items
         random.shuffle(items)
-        return prefix + SpecialToken.G_BEGIN.value + " " + " ".join(
-            [i[0] for i in items]
-        ) + " " + SpecialToken.G_END.value, [i[1] for i in items]
+        prompt = (
+            prefix
+            + SpecialToken.G_BEGIN.value
+            + " "
+            + " ".join([i[0] for i in items])
+            + " "
+            + SpecialToken.G_END.value
+        )
+        node_ids = [i[1] for i in items]
+
+        if return_text_map:
+            return prompt, node_ids, text_map
+
+        return prompt, node_ids
 
     def tokenize(self, texts: list[str], truncate: bool = True) -> torch.Tensor:
         input_ids = self.tokenizer(

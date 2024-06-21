@@ -46,6 +46,7 @@ class PretrainDatasetItemOutput:
     ent_ranges: list[torch.Tensor]
 
     _labels: Optional[torch.Tensor]=None
+    _id_text_map: Optional[dict[int, str]]=None
 
     # for debug
     ht_id: Optional[list[int]]=None
@@ -71,6 +72,7 @@ class PretrainDatasetOutput:
     ent_ranges: list[torch.Tensor]
 
     _labels: Optional[torch.Tensor]=None
+    _id_text_maps: Optional[list[dict[int, str]]]=None
 
     def __len__(self):
         return self.data.num_graphs
