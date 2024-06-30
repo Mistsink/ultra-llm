@@ -272,7 +272,7 @@ class GNNLLMModel(LlamaModel):
         # 从 logits 中采样出 token
         # hard = True 时，采样出的 token 是 one-hot 的, hard = False 时，采样出的 token 是 softmax 的
         logits = F.gumbel_softmax(logits, hard=False)
-        embeds = torch.matmul(logits, self.embed_tokens.weight[:self.ori_vocab_size])
+        embeds = torch.matmul(logits, self.embed_tokens.weight[: self.ori_vocab_size])
 
         for i in range(input_ids.size(0)):
             _input_ids = input_ids[i]
@@ -324,54 +324,14 @@ class GNNLLMModel(LlamaModel):
             model_input=model_input,
             embeds=embeds,
         )
-        """
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        use_cache = use_cache if use_cache is not None else self.config.use_cache
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError(
-                "You cannot specify both input_ids and inputs_embeds at the same time, and must specify either one"
-            )
-
-        if self.gradient_checkpointing and self.training and use_cache:
-            logger.warning_once(
-                "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`."
-            )
-            use_cache = False
-
-        if inputs_embeds is None:
-            inputs_embeds = self.embed_tokens(input_ids)
-
-        past_seen_tokens = 0
-        if use_cache:  # kept for BC (cache positions)
-            if not isinstance(past_key_values, StaticCache):
-                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-            past_seen_tokens = past_key_values.get_seq_length()
-
-        if cache_position is None:
-            cache_position = torch.arange(
-                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
-            )
-
-        if position_ids is None:
-            position_ids = cache_position.unsqueeze(0)
-
-        causal_mask = self._update_causal_mask(attention_mask, inputs_embeds, cache_position)
-
-        # embed positions
         hidden_states = inputs_embeds
 
-        # normalized
-        # Gemma downcasts the below to float16, causing sqrt(3072)=55.4256 to become 55.5
-        # See https://github.com/huggingface/transformers/pull/29402
-        normalizer = torch.tensor(self.config.hidden_size**0.5, dtype=hidden_states.dtype)
-        hidden_states = hidden_states * normalizer
-        """
-        hidden_states = inputs_embeds
+        ####################################################
+        # 测试方案：直接将 text 的 token 拼接池化作为 ent_emb   #
+        ####################################################
+        if model_input is not None and model_input.is_ent:
+            ent_emb = self.emb_from_mean_tokens(hidden_states, model_input)
+            return GNNLLMModelOutput(ent_emb=ent_emb)
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -642,3 +602,38 @@ class GNNLLMModel(LlamaModel):
         rel_emb = self.graph_model(model_input, boundary=boundary, layer_idx=-1)
 
         return rel_emb
+
+    def emb_from_mean_tokens(
+        self, hidden_states: torch.Tensor, model_input: ModelInput
+    ):
+        """
+        ####################################################
+        # 测试方案：直接将 text 的 token 拼接池化作为 ent_emb   #
+        ####################################################
+        """
+        bs = len(model_input.ranges)
+        assert bs == 1, "暂时只支持 batch_size = 1, 否则显存会爆"
+        boundary = torch.zeros(
+            bs,
+            model_input.data[0].num_nodes,
+            hidden_states.shape[2],
+            device=self.device,
+            dtype=hidden_states.dtype,
+        )
+        for i, ranges in enumerate(model_input.ranges):
+            for _i, j in enumerate(model_input.data[i].n_id):
+                j = _i  # 暂时这样写是因为 entity id 改成子图中的新id，而不是原图中的 id
+                if ranges[j][0][0] == -1:
+                    # 该 entity 未在 LLM 的prompt中出现过
+                    pass
+                else:
+                    # boundary[i, _i] = hidden_states[i, ranges[j][0]].view(-1)
+                    l_idx, r_idx = ranges[j][0]  # [l, r]
+                    boundary[i, _i] = hidden_states[i, l_idx : r_idx + 1].mean(dim=0)
+
+            # 单独处理 super_node
+            boundary[i, model_input.data[i].super_node_id] = hidden_states[
+                i, model_input.g_begin_idx : model_input.g_end_idx + 1
+            ].mean(dim=0)
+
+        return boundary
