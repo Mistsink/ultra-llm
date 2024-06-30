@@ -71,11 +71,11 @@ class DataloaderMixin(BaseClass):
                 "shuffle": False
             }
         else:
-            dataset = EvaluateLLMMatchEmbDataset(test_dataset, self.tokenizer, self.cfg)
+            dataset = EvaluateDataset(test_dataset, self.tokenizer, self.cfg)
 
             dataloader_params = {
                 "batch_size": self.args.eval_batch_size,
-                "collate_fn": EvaluateLLMMatchEmbDataset.collate_fn,
+                "collate_fn": EvaluateDataset.collate_fn,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
                 "shuffle": False

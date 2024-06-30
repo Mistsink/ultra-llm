@@ -77,13 +77,14 @@ class EvaluateDataset(PretrainDataset):
         relg_prompt, rel_ids = self.create_prompt(relg, "relation")
 
         pred_tail = torch.all(mask_triples[0, :, 0] == mask_triples[0, 0, 0])
-        entg_prompt, ent_ids = self.create_prompt(
+        entg_prompt, ent_ids, id_text_map = self.create_prompt(
             subg,
             "entity",
             ht_id=ht_id,
             neg_t_ids=neg_t_ids,
             neighbors_map=neighbors_map,
             pref_tail=pred_tail,
+            return_text_map=True
         )
         prompt_ids = self.tokenize([relg_prompt, entg_prompt])
 
@@ -119,6 +120,7 @@ class EvaluateDataset(PretrainDataset):
             ent_end_idx=ent_end_idx,
             ent_ranges=ent_ranges,
             _labels=labels,
+            _id_text_map=id_text_map,
         )
 
     def mask_edges(self, subg, triples=None):
@@ -158,6 +160,7 @@ class EvaluateDataset(PretrainDataset):
         neg_t_ids: Optional[list[int]] = None,
         neighbors_map: Optional[dict[int, list[list[int]]]] = None,
         pref_tail: Optional[bool] = None,
+        return_text_map=False,
     ) -> tuple[str, list[int]]:
         """
         根据 graph 中的 node, 构建 prompt
@@ -183,6 +186,7 @@ Example:
 
 Next, I will provide an actual description of a KG:
 """
+        text_map = {}
 
         id_oriid_map = g.n_id.tolist()
         descs = self.data.text_data.ent_desc
@@ -208,6 +212,7 @@ Next, I will provide an actual description of a KG:
             )
         )
         n_records.add(known_ht_id)
+        text_map[known_ht_id] = descs[id_oriid_map[known_ht_id]][0]
         _items.append(
             (
                 f"[ENTITY {unknown_ht_id}] {descs[id_oriid_map[unknown_ht_id]][0]}",
@@ -215,12 +220,15 @@ Next, I will provide an actual description of a KG:
             )
         )
         n_records.add(unknown_ht_id)
+        text_map[unknown_ht_id] = descs[id_oriid_map[unknown_ht_id]][0]
         #   neg_t
         for _id in neg_t_ids:
             if _id in n_records:
                 continue
             _items.append((f"[ENTITY {_id}] {descs[id_oriid_map[_id]][0]}", _id))
             n_records.add(_id)
+            text_map[_id] = descs[id_oriid_map[_id]][0]
+
         random.shuffle(_items)
         items.append(_items)
 
@@ -233,12 +241,14 @@ Next, I will provide an actual description of a KG:
                     continue
                 _items.append((f"[ENTITY {_id}] {descs[id_oriid_map[_id]][0]}", _id))
                 n_records.add(_id)
+                text_map[_id] = descs[id_oriid_map[_id]][0]
             # unknown_ht_id[i]
             for _id in neighbors_map[unknown_ht_id][i]:
                 if _id in n_records:
                     continue
                 _items.append((f"[ENTITY {_id}] {descs[id_oriid_map[_id]][0]}", _id))
                 n_records.add(_id)
+                text_map[_id] = descs[id_oriid_map[_id]][0]
             # neg_t[i]
             for neg_t_id in neg_t_ids:
                 for _id in neighbors_map[neg_t_id][i]:
@@ -248,6 +258,7 @@ Next, I will provide an actual description of a KG:
                         (f"[ENTITY {_id}] {descs[id_oriid_map[_id]][0]}", _id)
                     )
                     n_records.add(_id)
+                    text_map[_id] = descs[id_oriid_map[_id]][0]
             random.shuffle(_items)
             items.append(_items)
 
@@ -256,9 +267,20 @@ Next, I will provide an actual description of a KG:
         # flat
         items = [i for _items in items for i in _items]
 
-        return prefix + SpecialToken.G_BEGIN.value + " " + " ".join(
-            [i[0] for i in items]
-        ) + " " + SpecialToken.G_END.value, [i[1] for i in items]
+        prompt = (
+            prefix
+            + SpecialToken.G_BEGIN.value
+            + " "
+            + " ".join([i[0] for i in items])
+            + " "
+            + SpecialToken.G_END.value
+        )
+        node_ids = [i[1] for i in items]
+
+        if return_text_map:
+            return prompt, node_ids, text_map
+
+        return prompt, node_ids
 
 
 if __name__ == "__main__":

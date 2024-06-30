@@ -135,13 +135,13 @@ class GNNLLM(LlamaForCausalLM):
         if labels is not None:
         # TODO FIXME 为了减少计算量和显存，只预测最后的若干个 token 的 logits
             # 链接预测任务中暂时取倒数 20个 token
-            hidden_states = outputs[0][:, -20:, :]
+            hidden_states = outputs[0][:, -500:, :]
             logits: torch.Tensor = self.lm_head(hidden_states)
             logits = logits.float()
             loss = None
 
             # labels 也要修正成倒数 20个 token
-            labels = labels[:, -20:]
+            labels = labels[:, -500:]
 
         
             # Shift so that tokens < n predict n

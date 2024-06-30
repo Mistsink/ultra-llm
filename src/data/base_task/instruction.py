@@ -28,8 +28,8 @@ class BaseTaskInstrucDataset(Dataset):
     ):
         super().__init__()
         self.mask_triples = mask_triples.squeeze(0)
-        self.ent_emb = ent_emb.squeeze(0)
-        self.rel_emb = rel_emb.squeeze(0)
+        self.ent_emb = ent_emb.squeeze(0) if ent_emb is not None else None
+        self.rel_emb = rel_emb.squeeze(0) if rel_emb is not None else None
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.id_text_maps = id_text_maps
@@ -94,8 +94,9 @@ class BaseTaskInstrucDataset(Dataset):
             neg_ents = negs[:, 0].view(-1).unique().tolist()
 
         # 生成 prompt
-        r_emb = self.rel_emb[r].unsqueeze(0)
-        id_text_map = self.id_text_maps[idx]
+        # r_emb = self.rel_emb[r].unsqueeze(0)
+        assert len(self.id_text_maps) == 1, "TMP id_text_maps must only one"
+        id_text_map = self.id_text_maps[0]
         prompt, node_ids = self._generate_prompt(h, r, t, neg_ents, id_text_map=id_text_map, pred_tail=pred_tail)
         prompt += self.tokenizer.eos_token
         node_embs = self.ent_emb[node_ids]
@@ -129,7 +130,7 @@ Example:
 
 Following [ENTITY 1] is its embedding information. 
 Below is the embedding information for all entities: """
-        ents = neg_ents
+        ents = neg_ents + [h, t]
 
         random.shuffle(ents)
         ents_str = f" {SpecialToken.INFO_NODE.value} ".join(
@@ -140,7 +141,7 @@ Below is the embedding information for all entities: """
 
         random.shuffle(ents)
         brief_desc = ", ".join(
-            [f"{i}.{id_text_map[ent]}" for i, ent in enumerate(ents)]
+            [f"{i+1}.{id_text_map[ent]}" for i, ent in enumerate(ents)]
         )
 
         random.shuffle(ents)

@@ -1,4 +1,5 @@
 import random
+from typing import Optional
 import torch
 from transformers import AutoTokenizer, GemmaTokenizer, LlamaTokenizer
 from torch.utils.data import Dataset
@@ -45,7 +46,14 @@ class PretrainDataset(Dataset):
 
         # 对 h，t，entities 采子图
         entities = torch.cat([triple[:, 0], triple[:, 1]]).unique()
-        subg = self.sample_from_edge_index(entities)
+        # subg = self.sample_from_edge_index(entities)
+        subg, map_record = self.sample_from_edge_index(entities, return_khop_map=True)
+        oriid_idx_map: dict[int, int] = map_record[
+            "oriid_idx_map"
+        ]  # 原图中的 id -> new_id(idx)
+        neighbors_map: dict[int, list[list[int]]] = map_record[
+            "neighbors_map"
+        ]  # new_id(idx) -> neighbors[]
 
         # 采样子图中要预测的 triples，以及对应的负样本
         # cfg task num_mask
@@ -58,11 +66,8 @@ class PretrainDataset(Dataset):
                 pass
 
         # 将 mask_triples 中的 n_id 转成新的子图中的 n_id, 重新标记 [暂时不写]
-        origin_id_to_new_id = {
-            ori_id.item(): idx for idx, ori_id in enumerate(subg.n_id)
-        }
         mask_triples[:, :, :2] = mask_triples[:, :, :2].apply_(
-            lambda x: origin_id_to_new_id[x]
+            lambda x: oriid_idx_map[x]
         )
 
         # TODO FIXME 随机 mask 一下文本信息或者结构信息 [暂时不写]
@@ -81,7 +86,17 @@ class PretrainDataset(Dataset):
         #   a. 各子图单独一个 prompt [暂时不写]
         #   b. 子图 batch 成一个 g，直接 concat 三元组即可，共享同一个 prompt
         relg_prompt, rel_ids = self.create_prompt(relg, "relation")
-        entg_prompt, ent_ids = self.create_prompt(subg, "entity")
+
+        entities = torch.cat([mask_triples[:, :, 0], mask_triples[:, :, 1]]).unique()
+        ht_ids = list(set(mask_triples[:, 0, 0].tolist() + mask_triples[:, 0, 1].tolist()))
+        neg_t_ids = list(set(entities.tolist()) - set(ht_ids))
+        entg_prompt, ent_ids, id_text_map = self.create_prompt(
+            subg,
+            "entity",
+            return_text_map=True,
+            ht_ids=ht_ids,
+            neg_t_ids=neg_t_ids,
+        )
         prompt_ids = self.tokenize([relg_prompt, entg_prompt])
 
         # 记录各 mask 的节点、负样本在 g、prompt 中的位置，方便在 model encode 后收集特征
@@ -106,6 +121,7 @@ class PretrainDataset(Dataset):
             ent_begin_idx=ent_begin_idx,
             ent_end_idx=ent_end_idx,
             ent_ranges=ent_ranges,
+            _id_text_map=id_text_map,
         )
 
     def mask_edges(self, subg, triples=None):
@@ -314,6 +330,112 @@ class PretrainDataset(Dataset):
         return g
 
     def create_prompt(
+        self,
+        g: Data,
+        mode: str,
+        ht_ids: Optional[list[int]] = None,
+        neg_t_ids: Optional[list[int]] = None,
+        return_text_map=False,
+    ) -> tuple[str, list[int]]:
+        if mode == "relation":
+            return self._common_create_prompt(g, mode, return_text_map)
+        elif mode == "entity":
+            return self._central_create_prompt(
+                g, mode, ht_ids, neg_t_ids, return_text_map
+            )
+        else:
+            raise Exception("mode should be 'entity' or 'relation'")
+
+    def _central_create_prompt(
+        self,
+        g: Data,
+        mode: str,
+        ht_ids: Optional[list[int]] = None,
+        neg_t_ids: Optional[list[int]] = None,
+        return_text_map=False,
+    ) -> tuple[str, list[int]]:
+        """
+        优先将 ht、neg_entity 放入 prompt 中避免被截断，再而依序填充他们的k跳邻居
+        """
+
+        assert (
+            ht_ids is not None and neg_t_ids is not None
+        ), "entity mode must input ht_id, neg_t_ids, neighbors_map, pref_tail params in EVAL_STAGE"
+
+        prefix = """Below, I will provide a description document of a Knowledge Graph (KG), showcasing the text information for some nodes within this KG. It will be presented in a specific format:
+Example:
+<graph-begin> [ENTITY 1] Description of entity node 1 [ENTITY 2] Description of entity node 2 <graph-end>
+<graph-begin> [RELATION 1] Description of relation node 1[RELATION 2] Description of relation node 2 <graph-end>
+(1) Each KG information will start with <graph-begin> and end with <graph-end>;
+(2) Nodes are identified by two types: [ENTITY XX] and [RELATION YY]. "ENTITY" indicates that the node is an entity node, and "RELATION" indicates that the node is a relation node, where XX and YY represent their respective numbers.
+(3) The graph is divided into two types: entity graph, where all nodes are ENTITY nodes, and relation graph, where all nodes are RELATION nodes.
+
+Next, I will provide an actual description of a KG:
+"""
+
+        text_map = {}
+
+        id_oriid_map = g.n_id.tolist()
+        descs = self.data.text_data.ent_desc
+
+        items: list[list[tuple[str, int]]] = []
+        n_records = set()
+
+        # 分层级写入 prompt，每一层可以 shuffle
+        # 0 层
+        _items: list[tuple[str, int]] = []
+        #   ht_ids
+        for _id in ht_ids:
+            if _id in n_records:
+                continue
+            _items.append((f"[ENTITY {_id}] {descs[id_oriid_map[_id]][0]}", _id))
+            n_records.add(_id)
+            text_map[_id] = descs[id_oriid_map[_id]][0]
+        #   neg_t
+        for _id in neg_t_ids:
+            if _id in n_records:
+                continue
+            _items.append((f"[ENTITY {_id}] {descs[id_oriid_map[_id]][0]}", _id))
+            n_records.add(_id)
+            text_map[_id] = descs[id_oriid_map[_id]][0]
+        random.shuffle(_items)
+        items.append(_items)
+
+        # i hop
+        # TODO 不方便获取每个 neg-t 的邻居，直接将剩余的节点都塞进来
+        _items = []
+        for new_id, i in enumerate(g.n_id.cpu().tolist()):
+            if new_id in n_records:
+                continue
+            desc = descs[i][0]
+            _items.append((f"[ENTITY {new_id}] {desc}", new_id))
+            text_map[new_id] = desc
+            n_records.add(new_id)
+        random.shuffle(_items)
+        items.append(_items)
+
+        assert len(id_oriid_map) == len(n_records), "n_id中有节点未添加到prompt中"
+
+        # flat
+        items = [i for _items in items for i in _items]
+
+        prompt = (
+            prefix
+            + SpecialToken.G_BEGIN.value
+            + " "
+            + " ".join([i[0] for i in items])
+            + " "
+            + SpecialToken.G_END.value
+        )
+
+        node_ids = [i[1] for i in items]
+
+        if return_text_map:
+            return prompt, node_ids, text_map
+
+        return prompt, node_ids
+
+    def _common_create_prompt(
         self, g: Data, mode: str, return_text_map=False
     ) -> tuple[str, list[int]]:
         """
@@ -352,7 +474,7 @@ Next, I will provide an actual description of a KG:
             for i in range(g.num_nodes // 2):
                 desc = descs[i][0]
                 items.append((f"[RELATION {i}] {desc}", i))
-                text_map[new_id] = desc
+                text_map[i] = desc
 
         # shuffle items
         random.shuffle(items)

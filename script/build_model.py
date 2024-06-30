@@ -179,8 +179,17 @@ def build_model(
 
     # assert embed_tokens is not requires_grad
     peft_model.base_model.model.model.embed_tokens.weight.requires_grad_(False)
-    peft_model.print_trainable_parameters()
+    def print_trainable_parameters(model):
+        total_params = 0
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                num_params = param.numel()
+                total_params += num_params
+                print(f"{name}: {num_params} trainable parameters")
+        print(f"Total trainable parameters: {total_params}")
+    print_trainable_parameters(peft_model)
 
+    peft_model.print_trainable_parameters()
     # model = Ultra(
     #     rel_model_cfg=cfg.model.relation_model,
     #     entity_model_cfg=cfg.model.entity_model,

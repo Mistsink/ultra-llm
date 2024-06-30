@@ -3,7 +3,7 @@ from typing import Optional
 import torch
 from torch_geometric.data import Data
 
-from data.llm_match.instruction_llm_match import LLMMatchInstrucDataset
+from src.data.llm_match.instruction_llm_match import LLMMatchInstrucDataset
 from src.data.instruction import LPInstrucDataset
 from src.data.types import PretrainDatasetItemOutput
 from src.data.pretrain import PretrainDataset

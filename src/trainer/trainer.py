@@ -100,7 +100,7 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
 
             outputs: GenerateDecoderOnlyOutput = model.generate(
                 inputs=batch.input_ids,
-                generation_config=GenerationConfig(max_new_tokens=23, min_new_tokens=2),
+                generation_config=GenerationConfig(max_new_tokens=70, min_new_tokens=2),
                 embeds=batch.embs,
                 return_dict_in_generate=True,
             )
