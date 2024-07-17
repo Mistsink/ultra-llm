@@ -139,17 +139,21 @@ Below is the embedding information for all entities: """
         ents_str = ents_str + " " + SpecialToken.INFO_NODE.value
         info_nodes = copy.deepcopy(ents)
 
-        random.shuffle(ents)
-        brief_desc = ", ".join(
-            [f"{i+1}.{id_text_map[ent]}" for i, ent in enumerate(ents)]
-        )
+        # random.shuffle(ents)
+        # brief_desc = ", ".join(
+        #     [f"{i+1}.{id_text_map[ent]}" for i, ent in enumerate(ents)]
+        # )
 
         random.shuffle(ents)
         info_nodes_str = " ".join([f"{SpecialToken.INFO_NODE.value}"] * len(ents))
-        suffix = f"Here is a brief description of each entity (not necessarily in the above order): {brief_desc} . Given a sequence of embedding information: {info_nodes_str} , the corresponding IDs and their brief descriptions in order are as follows: "
+        # suffix = f"Here is a brief description of each entity (not necessarily in the above order): {brief_desc} . Given a sequence of embedding information: {info_nodes_str} , the corresponding IDs and their brief descriptions in order are as follows: "
+        suffix = f"Given a sequence of embedding information: {info_nodes_str} , the corresponding IDs are as follows: "
 
+        # prediction_str = ", ".join(
+        #     [f"[ENTITY {ent}] {id_text_map[ent]}" for ent in ents]
+        # )
         prediction_str = ", ".join(
-            [f"[ENTITY {ent}] {id_text_map[ent]}" for ent in ents]
+            [f"[ENTITY {ent}]" for ent in ents]
         )
         prediction_str = prediction_str + "."
 

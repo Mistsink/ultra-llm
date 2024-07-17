@@ -83,9 +83,9 @@ class GNNLLMModel(LlamaModel):
 
         # 用于将融合后的 ent_emb 映射到原始 token 的 emb by gumble softmax
         self.ori_vocab_size = config.vocab_size
-        self.fused_ent_token_to_ori_token = nn.Linear(
-            config.hidden_size, config.vocab_size
-        )
+        # self.fused_ent_token_to_ori_token = nn.Linear(
+        #     config.hidden_size, config.vocab_size
+        # )
 
     def __init_graph_models(self, config: Config) -> GNNModel:
         return GNNModel(config)
@@ -264,14 +264,14 @@ class GNNLLMModel(LlamaModel):
         # embeds 转换成离散的 emb_tokens 的加权组合
         # 使用 gumble softmax 来实现
         # 1) 使用 Linear
-        logits = self.fused_ent_token_to_ori_token(embeds)
+        # logits = self.fused_ent_token_to_ori_token(embeds)
         # 2) 计算点积相似度
-        # logits = torch.matmul(embeds, self.embed_tokens.weight[:self.ori_vocab_size].t())
+        logits = torch.matmul(embeds, self.embed_tokens.weight[:self.ori_vocab_size].t())
 
         # logits: (1, num_tokens, vocab_size)
         # 从 logits 中采样出 token
         # hard = True 时，采样出的 token 是 one-hot 的, hard = False 时，采样出的 token 是 softmax 的
-        logits = F.gumbel_softmax(logits, hard=False)
+        logits = F.gumbel_softmax(logits, hard=True)
         embeds = torch.matmul(logits, self.embed_tokens.weight[: self.ori_vocab_size])
 
         for i in range(input_ids.size(0)):

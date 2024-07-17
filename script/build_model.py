@@ -121,6 +121,7 @@ def build_model(
 
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
+        # load_in_8bit=True,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
         bnb_4bit_compute_dtype=torch.bfloat16,
@@ -159,7 +160,8 @@ def build_model(
         # print(model)
         # print(lora_modules)
         # lora_modules = 'model.embed_tokens'
-        lora_modules = 'dummy_layer'
+        # lora_modules = 'dummy_layer'
+        lora_modules = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'lm_head']
         peft_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
