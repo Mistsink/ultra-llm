@@ -82,10 +82,24 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
             losses.append(outputs.loss)
 
         loss = torch.stack(losses).mean()
-
         return loss, outputs
 
     def compute_loss_test(
+        self, model: GemmaForCausalLM, dataloader: List[InstrucInput]
+    ) -> Tuple[torch.Tensor, GNNLLMOutput]:
+        assert len(dataloader) == 1, "Only one batch is allowed in test mode"
+
+        for batch in dataloader:
+            batch = batch.to(self.accelerator.device)
+
+            outputs: CausalLMOutputWithPast = model(
+                input_ids=None, embeds=batch.embs, labels=batch.label_ids
+            )
+
+        dummy_loss = torch.tensor(0.0, device=outputs.logits.device)
+        return dummy_loss, outputs
+
+    def compute_loss_test_instruct_llm(
         self, model: GemmaForCausalLM, dataloader: List[InstrucInput]
     ) -> Tuple[torch.Tensor, GNNLLMOutput]:
         assert len(dataloader) == 1, "Only one batch is allowed in test mode"
@@ -214,12 +228,3 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
     ) -> Dict[str, float]:
         self._stage = "eval"
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
-
-
-if __name__ == "__main__":
-    from torchkeras.tools.transformers import VLogCallback
-
-    trainer = KGLLMTrainer(callbacks=[VLogCallback()])
-    trainer.get_eval_dataloader()
-    trainer.get_train_dataloader()
-    trainer.train()

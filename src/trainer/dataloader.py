@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Optional
 from torch.utils.data import DataLoader, Dataset
 from transformers import Trainer
 
+from src.data.transformer.instruction import DecoderDataset
 from src.data.base_task.instruction import BaseTaskInstrucDataset
 from src.data.llm_match.evaluate_llm_match import EvaluateLLMMatchEmbDataset
 from src.data.llm_match.instruction_llm_match import LLMMatchInstrucDataset
@@ -68,7 +69,7 @@ class DataloaderMixin(BaseClass):
                 "collate_fn": EvaluateDataset.collate_fn,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
-                "shuffle": False
+                "shuffle": False,
             }
         else:
             dataset = EvaluateDataset(test_dataset, self.tokenizer, self.cfg)
@@ -78,32 +79,43 @@ class DataloaderMixin(BaseClass):
                 "collate_fn": EvaluateDataset.collate_fn,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
-                "shuffle": False
+                "shuffle": False,
             }
 
         eval_dataloader = DataLoader(dataset, **dataloader_params)
 
         return self.accelerator.prepare(eval_dataloader)
-    
-    def get_instruct_dataloader(self, inputs: PretrainDatasetOutput, outputs: GNNLLMOutput) -> DataLoader:
-        if not self.cfg.model.only_llm:
-            dataset = LPInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len)
 
-            dataloader_params = {
-                "batch_size": self.cfg.train.instruct_batch_size,
-                "collate_fn": LPInstrucDataset.collate_fn,
-                "num_workers": 0,
-                "pin_memory": False,
-            }
-        else:
-            dataset = BaseTaskInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len, id_text_maps=inputs._id_text_maps)
+    def get_instruct_dataloader(
+        self, inputs: PretrainDatasetOutput, outputs: GNNLLMOutput
+    ) -> DataLoader:
+        # if not self.cfg.model.only_llm:
+        #     dataset = LPInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len)
 
-            dataloader_params = {
-                "batch_size": self.cfg.train.instruct_batch_size,
-                "collate_fn": BaseTaskInstrucDataset.collate_fn,
-                "num_workers": 0,
-                "pin_memory": False,
-            }
+        #     dataloader_params = {
+        #         "batch_size": self.cfg.train.instruct_batch_size,
+        #         "collate_fn": LPInstrucDataset.collate_fn,
+        #         "num_workers": 0,
+        #         "pin_memory": False,
+        #     }
+        # else:
+        #     dataset = BaseTaskInstrucDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb, self.tokenizer, max_length=self.cfg.task.instruct_len, id_text_maps=inputs._id_text_maps)
+
+        #     dataloader_params = {
+        #         "batch_size": self.cfg.train.instruct_batch_size,
+        #         "collate_fn": BaseTaskInstrucDataset.collate_fn,
+        #         "num_workers": 0,
+        #         "pin_memory": False,
+        #     }
+
+        dataset = DecoderDataset(inputs.mask_triples, outputs.ent_emb, outputs.rel_emb)
+
+        dataloader_params = {
+            "batch_size": self.cfg.train.instruct_batch_size,
+            "collate_fn": DecoderDataset.collate_fn,
+            "num_workers": 0,
+            "pin_memory": False,
+        }
 
         # We use the same batch_size as for eval.
         # return self.accelerator.prepare(DataLoader(dataset, **dataloader_params))

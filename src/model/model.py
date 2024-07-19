@@ -14,6 +14,7 @@ from src.data.types import PretrainDatasetOutput, ModelInput
 from src.ultra.models import RelNBFNet, EntityNBFNet
 from src.model.gemma_gnn import GNNLLMModel, GNNLLMModelOutput
 from src.model.type import GNNLLMConfig
+from src.model.transformer import TransEncoder
 
 
 @dataclass
@@ -42,6 +43,8 @@ class GNNLLM(LlamaForCausalLM):
 
         # Initialize weights and apply final processing
         self.post_init()
+
+        self.transformer_decoder = TransEncoder(cfg)
 
     def init_graph_tokenizer(self, tokenizer: GemmaTokenizer, num_new_tokens: int):
         self.model.init_graph_tokenizer(tokenizer, num_new_tokens)
@@ -116,60 +119,46 @@ class GNNLLM(LlamaForCausalLM):
 
         else:
             assert embeds is not None, "embeds must be provided when data is None, as to model is a decoder"
-            # As decoder
-            outputs: BaseModelOutputWithPast = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                cache_position=cache_position,
-                embeds=embeds
-            )
+            # # LLM As decoder
+            # outputs: BaseModelOutputWithPast = self.model(
+            #     input_ids=input_ids,
+            #     attention_mask=attention_mask,
+            #     position_ids=position_ids,
+            #     past_key_values=past_key_values,
+            #     inputs_embeds=inputs_embeds,
+            #     use_cache=use_cache,
+            #     output_attentions=output_attentions,
+            #     output_hidden_states=output_hidden_states,
+            #     return_dict=return_dict,
+            #     cache_position=cache_position,
+            #     embeds=embeds
+            # )
 
-        # Instruction Tuning
+            ###########################################
+            ####        transformer decoder        ####
+            ###########################################
+            # pre_embs 1, embes, dim
+            # options_embs 1, num_options, embes, dim
+            pre_embs = embeds[:2].unsqueeze(0)
+            options_embs = embeds[2:].unsqueeze(0).unsqueeze(2)
+            logits, hidden_out = self.transformer_decoder(pre_embs=pre_embs, options_embs=options_embs)
+
         if labels is not None:
-        # TODO FIXME 为了减少计算量和显存，只预测最后的若干个 token 的 logits
-            # 链接预测任务中暂时取倒数 20个 token
-            hidden_states = outputs[0][:, -500:, :]
-            logits: torch.Tensor = self.lm_head(hidden_states)
-            logits = logits.float()
-            loss = None
-
-            # labels 也要修正成倒数 20个 token
-            labels = labels[:, -500:]
-
-        
-            # Shift so that tokens < n predict n
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
             loss_fct = nn.CrossEntropyLoss()
-            shift_logits = shift_logits.view(-1, self.lm_head.out_features) # 原始是用 self.config.vocab_size，这里我调整了词表大小，但不会更新，所以 lm_head 也不需要更新
-            shift_labels = shift_labels.view(-1)
-            # Enable model parallelism
-            shift_labels = shift_labels.to(shift_logits.device)
-            loss = loss_fct(shift_logits, shift_labels)
+            loss = loss_fct(logits, labels)
 
             # TODO FIXME 这里是为了让返回的 logits 数据变少，否则在 eval 时外部会一直保留积累每个 batch 的 logits，送给 compute_metric fn 中使用
-            logits = shift_logits.argmax(-1).unsqueeze(0)  # [labels != -100]
+            logits = logits.argmax(-1).unsqueeze(0)  # [labels != -100]
         else:
-            # For generate
-            hidden_states = outputs[0]
-            logits = self.lm_head(hidden_states)
             logits = logits.float()
             loss = None
 
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,
-            past_key_values=outputs.past_key_values,
-            hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
+            # past_key_values=outputs.past_key_values,
+            # hidden_states=outputs.hidden_states,
+            # attentions=outputs.attentions,
         )
 
     def _forward_setup(self, output_attentions, output_hidden_states, return_dict):

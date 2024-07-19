@@ -37,6 +37,17 @@ class ModelConfig:
     relation_model: ModelDetailConfig = field(default_factory=ModelDetailConfig)
     entity_model: ModelDetailConfig = field(default_factory=ModelDetailConfig)
 
+    """
+    Transformer model config
+    """
+    trans_heads: int = field(default=4)
+    trans_layers: int = field(default=2)
+    trans_hidden_dim: int = field(default=256)
+    trans_max_length: int = field(default=1024)
+    trans_eps: float = field(default=1e-12)
+    trans_dropout: float = field(default=0.1)
+
+
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             if hasattr(self, k):
@@ -55,6 +66,12 @@ class ModelConfig:
             "hf_token": self.hf_token,
             "relation_model": self.relation_model.to_dict(),
             "entity_model": self.entity_model.to_dict(),
+            "trans_heads": self.trans_heads,
+            "trans_layers": self.trans_layers,
+            "trans_hidden_dim": self.trans_hidden_dim,
+            "trans_max_length": self.trans_max_length,
+            "trans_eps": self.trans_eps,
+            "trans_dropout": self.trans_dropout,
         }
 
 

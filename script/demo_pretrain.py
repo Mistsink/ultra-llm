@@ -1,7 +1,8 @@
 import os
+
 # 好像没用
 os.environ.setdefault("HF_HUB_OFFLINE", "0")
-os.environ['HF_HUB_OFFLINE'] = "0"
+os.environ["HF_HUB_OFFLINE"] = "0"
 
 import sys
 
@@ -13,7 +14,7 @@ import transformers
 from transformers import Trainer, TrainingArguments, HfArgumentParser
 
 from script.build_model import build_model, build_tokenizer_model
-from src.trainer.metric import ROUGE, metric_fn
+from src.trainer.metric import ROUGE, metric_fn, decoder_metric_fn
 from src.trainer.trainer import KGLLMTrainer
 from config.config import Config
 from src.data.datasets import FB15k237Inductive
@@ -48,7 +49,9 @@ def multigraph_collator(batch, train_graphs):
 def parse_args(config_path: str) -> Config:
     parser = HfArgumentParser(Config)
     cfg: Config = parser.parse_yaml_file(config_path)[0]
-    cfg.train = cfg.train.set_dataloader(train_batch_size=cfg.train.batch_size, eval_batch_size=cfg.train.batch_size)
+    cfg.train = cfg.train.set_dataloader(
+        train_batch_size=cfg.train.batch_size, eval_batch_size=cfg.train.batch_size
+    )
 
     # get_logger().
     return cfg
@@ -82,7 +85,8 @@ if __name__ == "__main__":
         train_dataset=train_data,
         eval_dataset=valid_data,
         tokenizer=tokenizer,
-        compute_metrics=ROUGE(cfg, tokenizer),
+        # compute_metrics=ROUGE(cfg, tokenizer),
+        compute_metrics=decoder_metric_fn,
         # callbacks=[VLogCallback(save_path=os.path.join(cfg.output_dir, "history.png"))],
     )
 
