@@ -61,8 +61,8 @@ class GNNLLMModel(LlamaModel):
         if self.cfg.model.only_llm:
             self.fuse_llm_ent_layer = MLP(
                 config.hidden_size * 2,
-                config.hidden_size,
-                config.hidden_size,
+                cfg.model.trans_hidden_dim,
+                cfg.model.trans_hidden_dim,
                 2,
             )
             self.rel_norm = LlamaRMSNorm(
@@ -71,15 +71,17 @@ class GNNLLMModel(LlamaModel):
         else:
             self.fuse_llm_ent_layer = MLP(
                 config.hidden_size * 2 + cfg.model.entity_model.hidden_dims[-1],
-                config.hidden_size,
-                config.hidden_size,
+                cfg.model.trans_hidden_dim,
+                cfg.model.trans_hidden_dim,
+                # config.hidden_size,
                 2,
             )
             self.rel_norm = LlamaRMSNorm(
                 cfg.model.relation_model.hidden_dims[-1], config.rms_norm_eps
             )
 
-        self.ent_norm = LlamaRMSNorm(config.hidden_size, config.rms_norm_eps)
+        # self.ent_norm = LlamaRMSNorm(config.hidden_size, config.rms_norm_eps)
+        self.ent_norm = LlamaRMSNorm(cfg.model.trans_hidden_dim, config.rms_norm_eps)
 
         # 用于将融合后的 ent_emb 映射到原始 token 的 emb by gumble softmax
         self.ori_vocab_size = config.vocab_size
@@ -329,9 +331,9 @@ class GNNLLMModel(LlamaModel):
         ####################################################
         # 测试方案：直接将 text 的 token 拼接池化作为 ent_emb   #
         ####################################################
-        if model_input is not None and model_input.is_ent:
-            ent_emb = self.emb_from_mean_tokens(hidden_states, model_input)
-            return GNNLLMModelOutput(ent_emb=ent_emb)
+        # if model_input is not None and model_input.is_ent:
+        #     ent_emb = self.emb_from_mean_tokens(hidden_states, model_input)
+        #     return GNNLLMModelOutput(ent_emb=ent_emb)
 
         # decoder layers
         all_hidden_states = () if output_hidden_states else None
@@ -393,7 +395,7 @@ class GNNLLMModel(LlamaModel):
                 ent_emb = self.fuse_llm_ent(model_input, hidden_states, ent_emb)
                 while torch.isnan(self.ent_norm.weight).any():
                     self.ent_norm = LlamaRMSNorm(
-                        self.config.hidden_size, self.config.rms_norm_eps
+                        self.cfg.model.trans_hidden_dim, self.config.rms_norm_eps
                     ).to(device=self.device, dtype=ent_emb.dtype)
                 ent_emb = self.ent_norm(ent_emb)  # 使用LLM 的 Norm
             else:

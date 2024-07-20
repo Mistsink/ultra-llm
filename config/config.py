@@ -54,6 +54,7 @@ class ModelConfig:
                 setattr(self, k, v)
         self.relation_model = ModelDetailConfig(**kwargs.get("relation_model", {}))
         self.entity_model = ModelDetailConfig(**kwargs.get("entity_model", {}))
+        self.trans_eps = float(self.trans_eps)
 
     def to_dict(self):
         return {

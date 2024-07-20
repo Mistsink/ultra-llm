@@ -1,6 +1,7 @@
 from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import BertGenerationEncoder, BertLayer, BertConfig
 from transformers.models.bert.modeling_bert import BertEncoder
 from transformers.modeling_outputs import BaseModelOutputWithPastAndCrossAttentions
@@ -30,6 +31,21 @@ class Encoder(nn.Module):
         attention_mask: Optional[torch.FloatTensor] = None,
         use_cache: Optional[bool] = None,
     ) -> BaseModelOutputWithPastAndCrossAttentions:
+        for i, layer in enumerate(self.encoder.layer):
+            if torch.isnan(layer.attention.output.LayerNorm.weight).any():
+                self.encoder.layer[i].attention.output.LayerNorm = nn.LayerNorm(
+                    self.cfg.model.trans_hidden_dim, eps=self.cfg.model.trans_eps
+                ).to(
+                    device=hidden_states.device,
+                    dtype=self.encoder.layer[i].attention.output.LayerNorm.weight.dtype,
+                )
+            if torch.isnan(layer.output.LayerNorm.weight).any():
+                self.encoder.layer[i].output.LayerNorm = nn.LayerNorm(
+                    self.cfg.model.trans_hidden_dim, eps=self.cfg.model.trans_eps
+                ).to(
+                    device=hidden_states.device,
+                    dtype=self.encoder.layer[i].output.LayerNorm.weight.dtype,
+                )
         return self.encoder(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
@@ -52,7 +68,7 @@ class TransEncoder(nn.Module):
         self, pre_embs: torch.Tensor, options_embs: torch.Tensor
     ) -> Tuple[torch.Tensor, BaseModelOutputWithPastAndCrossAttentions]:
         """
-        pre_embs: [1, embes, dim]
+        pre_embs: [1, 2, embes, dim]
         options_embs: [1, num_options, embes, dim]
         """
         batch_size = pre_embs.size(0)
@@ -63,7 +79,7 @@ class TransEncoder(nn.Module):
         input_emb, options_position_ids = self.embeddings(
             pre_embs=pre_embs,
             options_embs=options_embs,
-        ).unsqueeze(0)
+        )
         seq_length = input_emb.size(1)
 
         attention_mask = torch.ones((batch_size, seq_length), device=device)
@@ -95,16 +111,20 @@ class TransEncoder(nn.Module):
         seq_emb = seq_emb.squeeze(0)
         task = seq_emb[0]
         logits = []
+        dim_sqrt = torch.sqrt(torch.tensor(self.cfg.model.trans_hidden_dim, device=seq_emb.device))
         for option_pos in options_position_ids:
             option_emb = seq_emb[option_pos]  # [num_embs, dim]
             option_emb = torch.cat(
-                [*option_emb, torch.mean(option_emb, dim=0).unsqueeze(0)], dim=0
+                [option_emb, torch.mean(option_emb, dim=0).unsqueeze(0)], dim=0
             )  # [num_embs+1, dim]
-            _logits = torch.matmul(task, option_emb.T).unsqueeze(0)
-            _logit = torch.max(_logits, dim=1)
-            logits.append(_logit)
-        logits = torch.cat(logits, dim=0).squeeze(1)  # [num_options]
-        return logits
+
+            _logits = torch.matmul(task, option_emb.T) / dim_sqrt
+            __logits = F.gumbel_softmax(_logits, hard=True)
+            _logit = torch.matmul(_logits, __logits.T)
+            logits.append(_logit)   # dim: []
+
+        logits = torch.stack(logits, dim=0)  # [num_options]
+        return logits.unsqueeze(0)
 
 
 class Embeddings(nn.Module):
@@ -113,7 +133,7 @@ class Embeddings(nn.Module):
         self.cfg = config
 
         tokens = ["TASK", "ENTITY", "RELATION", "[SEP]"]
-        self.token2id = {token: i for i, token in enumerate(tokens)}
+        self.token2id = {token: torch.tensor(i) for i, token in enumerate(tokens)}
         self.special_token_embeddings = nn.Embedding(
             len(tokens), self.cfg.model.trans_hidden_dim
         )
@@ -142,35 +162,37 @@ class Embeddings(nn.Module):
         self, pre_embs: torch.Tensor, options_embs: torch.Tensor
     ) -> torch.Tensor:
         """
-        pre_embs: [1, embes, dim]
+        pre_embs: [1, 2, embes, dim]
         options_embs: [1, num_options, embes, dim]
         """
         # [T] [E] pre_embs[:-1] [R] pre_embs[-1] [SEP] [E] options_emb_1 [E] options_emb_2 ...
-        sep_emb = self.SEPEmb()
-        task_emb = self.TaskEmb()
-        entity_emb = self.EntityEmb()
-        relation_emb = self.RelationEmb()
+        sep_emb = self.SEPEmb().unsqueeze(0)
+        task_emb = self.TaskEmb().unsqueeze(0)
+        entity_emb = self.EntityEmb().unsqueeze(0)
+        relation_emb = self.RelationEmb().unsqueeze(0)
 
         first_part = torch.cat(
-            [task_emb, entity_emb, *pre_embs[0, :-1], relation_emb], dim=0
+            [task_emb, entity_emb, pre_embs[0, 0], relation_emb], dim=0
         )
-        last_part = pre_embs[:, -1].unsqueeze(1)
+        last_part = pre_embs[0, 1]
 
         option_part, options_position_ids = [], []
         start_idx = len(first_part) + len(last_part) + 1
         for option_embs in options_embs[0]:
             _option_part = [entity_emb]
-            for option_emb in option_embs:
-                _option_part.append(option_emb)
+            _option_part.append(option_embs)
+
             options_position_ids.append(
-                list(range(start_idx, start_idx + len(_option_part)))
+                list(range(start_idx, start_idx + len(option_embs) + 1))
             )
-            start_idx += len(_option_part)
+            start_idx += len(option_embs) + 1
 
             option_part.extend(_option_part)
 
         full_emb = torch.cat(
             [first_part, last_part, sep_emb, *option_part], dim=0
+        ).unsqueeze(
+            0
         )  # dim: seq_len, dim
 
         position_ids = torch.arange(full_emb.size(0), device=full_emb.device).unsqueeze(
@@ -180,6 +202,10 @@ class Embeddings(nn.Module):
 
         embeddings = full_emb + position_embeddings
 
+        if torch.isnan(self.LayerNorm.weight).any():
+            self.LayerNorm = nn.LayerNorm(
+                self.cfg.model.trans_hidden_dim, eps=self.cfg.model.trans_eps
+            ).to(device=embeddings.device, dtype=self.LayerNorm.weight.dtype)
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings, options_position_ids

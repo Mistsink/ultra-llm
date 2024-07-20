@@ -82,23 +82,23 @@ def decoder_metric_fn(pred: EvalPrediction) -> Dict:
     """
     logits, labels = pred.predictions, pred.label_ids
 
-    probabilities = torch.argmax(logits, dim=-1)
-
+    probabilities = np.exp(logits) / np.sum(np.exp(logits), axis=-1, keepdims=True)
+    
     # 获得每个样本预测的排名，按概率降序排列
-    _, ranked_indices = torch.sort(probabilities, descending=True, dim=1)
+    ranked_indices = np.argsort(probabilities, axis=-1)[:, ::-1]
     
     # 找到正确答案的索引排名
-    rank_of_correct = torch.nonzero(ranked_indices == torch.tensor(labels).unsqueeze(1), as_tuple=True)[1] + 1
+    rank_of_correct = np.argwhere(ranked_indices == labels[:, None])[:, 1] + 1
     
     # 计算各个 hit@k 指标
     k_values = [1, 3, 5, 10]
-    hit_at_k = {f'hit@{k}': (rank_of_correct <= k).float().mean().item() for k in k_values}
+    hit_at_k = {f'hit@{k}': np.mean(rank_of_correct <= k) for k in k_values}
     
     # 计算 MR (Mean Rank)
-    mean_rank = rank_of_correct.float().mean().item()
+    mean_rank = np.mean(rank_of_correct)
     
     # 计算 MRR (Mean Reciprocal Rank)
-    mean_reciprocal_rank = (1.0 / rank_of_correct.float()).mean().item()
+    mean_reciprocal_rank = np.mean(1.0 / rank_of_correct)
     
     # 汇总所有指标
     metrics = {

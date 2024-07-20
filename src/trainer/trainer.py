@@ -24,7 +24,7 @@ from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_N
 
 from config.config import Config
 from src.data.instruction import LPInstrucDataset
-from src.model.model import GNNLLMOutput
+from src.model.model import GNNLLMOutput, CusCausalLMOutputWithPast
 from src.data.types import InstrucInput, PretrainDatasetOutput
 from src.trainer.dataloader import DataloaderMixin
 from src.trainer.metric import metric_fn
@@ -73,13 +73,21 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
     ) -> Tuple[torch.Tensor, GNNLLMOutput]:
         # 2. forward
         losses = []
+        labels = []
         for batch in dataloader:
             batch = batch.to(self.accelerator.device)
-            outputs: CausalLMOutputWithPast = model(
+            outputs: CusCausalLMOutputWithPast = model(
                 input_ids=batch.input_ids, embeds=batch.embs, labels=batch.label_ids
             )
+            if not model.training and outputs.labels is not None:
+                labels.append(outputs.labels)
 
             losses.append(outputs.loss)
+
+        if not model.training and len(labels) > 0:
+            self.labels = torch.stack(labels)
+        else:
+            self.labels = None
 
         loss = torch.stack(losses).mean()
         return loss, outputs
@@ -186,30 +194,11 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
-        """
-        Perform an evaluation step on `model` using `inputs`.
+        loss, logits, labels = super().prediction_step(model, inputs, prediction_loss_only, ignore_keys=['past_key_values', 'labels'])
+        if self.labels is not None:
+            labels = self.labels
+        return loss, logits, labels
 
-        Subclass and override to inject custom behavior.
-
-        Args:
-            model (`nn.Module`):
-                The model to evaluate.
-            inputs (`Dict[str, Union[torch.Tensor, Any]]`):
-                The inputs and targets of the model.
-
-                The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
-                argument `labels`. Check your model's documentation for all accepted arguments.
-            prediction_loss_only (`bool`):
-                Whether or not to return the loss only.
-            ignore_keys (`List[str]`, *optional*):
-                A list of keys in the output of your model (if it is a dictionary) that should be ignored when
-                gathering predictions.
-
-        Return:
-            Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]: A tuple with the loss,
-            logits and labels (each being optional).
-        """
-        return super().prediction_step(model, inputs, prediction_loss_only, ignore_keys)
 
     def predict(
         self,

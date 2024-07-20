@@ -35,7 +35,7 @@ class DecoderDataset(Dataset):
     @staticmethod
     def collate_fn(batch: list[InstrucInput]) -> InstrucInput:
         triples = torch.stack([i.triple for i in batch], dim=0)
-        label_ids = torch.stack([i.label_ids for i in batch], dim=0)
+        label_ids = torch.tensor([i.label_ids for i in batch])
         embs = pad_sequence([i.embs for i in batch], batch_first=True, padding_value=0)
 
         return InstrucInput(
@@ -67,8 +67,13 @@ class DecoderDataset(Dataset):
         ), f"Cannot find the target entity {target_e} in the candidate entities {candidate_ents}"
 
         node_embs = torch.cat(
-            [self.ent_emb[known_e], self.rel_emb[r], self.ent_emb[target_e]]
-        )
+            [
+                self.ent_emb[known_e].unsqueeze(0),
+                self.rel_emb[r].unsqueeze(0),
+                self.ent_emb[candidate_ents],
+            ],
+            dim=0,
+        )  # dim:
 
         return InstrucInput(
             triple=torch.tensor((h, r, t)),

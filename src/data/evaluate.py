@@ -108,6 +108,7 @@ class EvaluateDataset(PretrainDataset):
             max_length=self.cfg.task.instruct_len,
         )
 
+
         return PretrainDatasetItemOutput(
             mask_triples=mask_triples,
             data=subg,

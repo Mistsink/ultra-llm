@@ -167,7 +167,8 @@ class InstrucInput:
     g_emb: Optional[torch.Tensor] = None
 
     def to(self, device):
-        self.input_ids = self.input_ids.to(device)
+        if self.input_ids is not None:
+            self.input_ids = self.input_ids.to(device)
         self.label_ids = self.label_ids.to(device)
         self.embs = self.embs.to(device)
         if self.g_emb is not None:

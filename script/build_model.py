@@ -22,7 +22,7 @@ from peft import (
     get_peft_model,
     LoraConfig,
     TaskType,
-    PeftConfig
+    PeftConfig,
 )
 
 
@@ -56,7 +56,7 @@ def find_all_linear_names(model: GemmaForCausalLM, cfg: Config):
 def set_requires_grad(
     model: GemmaForCausalLM, module_names: List[str] | str, requires_grad=True
 ):
-    if module_names == '*':
+    if module_names == "*":
         for name, module in model.named_modules():
             for param in module.parameters():
                 param.requires_grad = requires_grad
@@ -74,7 +74,7 @@ def build_tokenizer(cfg: Config) -> GemmaTokenizer:
             cache_dir=cfg.model.cache_dir,
             token=cfg.model.hf_token,
             padding_side="left",
-            local_files_only=True
+            local_files_only=True,
         )
     elif "llama" in cfg.model.llm_name:
         # LLaMA3 后暂不能使用 LlamaTokenizer 构建
@@ -152,44 +152,55 @@ def build_model(
     )
 
     if not cfg.model.use_peft:
-        set_requires_grad(model, '*', requires_grad=False)
+        set_requires_grad(model, "*", requires_grad=False)
         set_requires_grad(model, custom_layers, requires_grad=True)
         return model
 
-    # if not cfg.model.load_lora:
-    #     # lora_modules = find_all_linear_names(model, cfg)
-    #     # print(model)
-    #     # print(lora_modules)
-    #     # lora_modules = 'model.embed_tokens'
-    #     lora_modules = 'dummy_layer'
-    #     # lora_modules = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'lm_head']
-    #     peft_config = LoraConfig(
-    #         task_type=TaskType.CAUSAL_LM,
-    #         inference_mode=False,
-    #         r=8,
-    #         lora_alpha=8,
-    #         lora_dropout=0.1,
-    #         target_modules=lora_modules,
-    #         modules_to_save=custom_layers
-    #     )
-    #     peft_model = get_peft_model(model, peft_config)
-    # else:
-    # # if load lora model
-    #     peft_config = PeftConfig.from_pretrained(cfg.model.cache_dir)
-    #     peft_model = PeftModel.from_pretrained(model, cfg.model.cache_dir, config=peft_config)
-    
+    if not cfg.model.load_lora:
+        # lora_modules = find_all_linear_names(model, cfg)
+        # print(model)
+        # print(lora_modules)
+        # lora_modules = 'model.embed_tokens'
+        lora_modules = 'dummy_layer'
+        # lora_modules = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj', 'lm_head']
+        peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            inference_mode=False,
+            r=8,
+            lora_alpha=8,
+            lora_dropout=0.1,
+            target_modules=lora_modules,
+            modules_to_save=custom_layers
+        )
+        model = get_peft_model(model, peft_config)
+    else:
+    # if load lora model
+        peft_config = PeftConfig.from_pretrained(cfg.model.cache_dir)
+        model = PeftModel.from_pretrained(model, cfg.model.cache_dir, config=peft_config)
+
     set_requires_grad(model, custom_layers, requires_grad=True)
 
     # assert embed_tokens is not requires_grad
-    model.base_model.model.model.embed_tokens.weight.requires_grad_(False)
+    try:
+        model.base_model.model.model.embed_tokens.weight.requires_grad_(False)
+    except Exception as e:
+        model.model.embed_tokens.weight.requires_grad_(False)
+
     def print_trainable_parameters(model):
-        total_params = 0
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = 0
         for name, param in model.named_parameters():
             if param.requires_grad:
                 num_params = param.numel()
-                total_params += num_params
-                print(f"{name}: {num_params} trainable parameters")
-        print(f"Total trainable parameters: {total_params}")
+                trainable_params += num_params
+                formatted_params = format_number(num_params)
+                print(f"{name}: {formatted_params} trainable parameters")
+        formatted_total = format_number(trainable_params)
+        total_percentage = (trainable_params / total_params) * 100
+        print(
+            f"Total trainable parameters: {formatted_total} ({total_percentage:.2f}%)[{format_number(total_params)}]"
+        )
+
     print_trainable_parameters(model)
 
     model.print_trainable_parameters()
@@ -209,3 +220,11 @@ def build_tokenizer_model(cfg: Config) -> tuple[AutoTokenizer, PeftModel]:
     # model = TestModel()
     # tokenizer = None
     return tokenizer, model
+
+
+def format_number(num):
+    for unit in ["", "K", "M", "B", "T"]:
+        if abs(num) < 1000.0:
+            return f"{num:.1f}{unit}"
+        num /= 1000.0
+    return f"{num:.1f}P"
