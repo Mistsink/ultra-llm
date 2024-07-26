@@ -101,12 +101,12 @@ class EvaluateDataset(PretrainDataset):
 
         # TODO FIXME ent_ranges 中没有 subg.n_id 中所有内容
 
-        input_ids, labels = LPInstrucDataset.get_labels(
-            mask_triples[0],
-            self.tokenizer,
-            eos_token=self.tokenizer.eos_token,
-            max_length=self.cfg.task.instruct_len,
-        )
+        # input_ids, labels = LPInstrucDataset.get_labels(
+        #     mask_triples[0],
+        #     self.tokenizer,
+        #     eos_token=self.tokenizer.eos_token,
+        #     max_length=self.cfg.task.instruct_len,
+        # )
 
 
         return PretrainDatasetItemOutput(
@@ -120,7 +120,8 @@ class EvaluateDataset(PretrainDataset):
             ent_begin_idx=ent_begin_idx,
             ent_end_idx=ent_end_idx,
             ent_ranges=ent_ranges,
-            _labels=labels,
+            # _labels=labels,
+            _labels=torch.tensor(0),
             _id_text_map=id_text_map,
         )
 

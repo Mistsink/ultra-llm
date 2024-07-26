@@ -47,7 +47,6 @@ class ModelConfig:
     trans_eps: float = field(default=1e-12)
     trans_dropout: float = field(default=0.1)
 
-
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             if hasattr(self, k):
@@ -124,6 +123,7 @@ class OptimizerConfig:
     def to_dict(self):
         return {"class_name": self.class_name, "lr": self.lr}
 
+
 @dataclass
 class TrainConfig(TrainingArguments):
     # rewrite inner default config
@@ -151,6 +151,7 @@ class TrainConfig(TrainingArguments):
             "help": "Whether the `metric_for_best_model` should be maximized or not."
         },
     )
+    bf16_full_eval: Optional[bool] = field(default=True)
 
 
 @dataclass
@@ -179,4 +180,3 @@ class Config:
             "optimizer": self.optimizer.to_dict(),
             "train": self.train.to_dict(),
         }
-    

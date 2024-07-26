@@ -152,6 +152,7 @@ class GNNLLM(LlamaForCausalLM):
             loss = loss_fct(logits, labels)
 
             logits = logits.float()
+            
             # TODO FIXME 这里是为了让返回的 logits 数据变少，否则在 eval 时外部会一直保留积累每个 batch 的 logits，送给 compute_metric fn 中使用
             # logits = logits.argmax(-1).unsqueeze(0)  # [labels != -100]
         else:

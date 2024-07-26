@@ -110,7 +110,7 @@ class PretrainDatasetOutput:
         
     def get(self, key, default_val: Optional[any]=None):
         if key == 'labels':
-            return self._labels
+            return default_val if self._labels is None else self._labels
         elif key == 'return_loss':
             return True
         return default_val

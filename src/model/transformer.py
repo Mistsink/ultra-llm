@@ -32,14 +32,24 @@ class Encoder(nn.Module):
         use_cache: Optional[bool] = None,
     ) -> BaseModelOutputWithPastAndCrossAttentions:
         for i, layer in enumerate(self.encoder.layer):
-            if torch.isnan(layer.attention.output.LayerNorm.weight).any():
+            while (
+                torch.isnan(
+                    self.encoder.layer[i].attention.output.LayerNorm.weight
+                ).any()
+                or torch.isnan(
+                    self.encoder.layer[i].attention.output.LayerNorm.bias
+                ).any()
+            ):
                 self.encoder.layer[i].attention.output.LayerNorm = nn.LayerNorm(
                     self.cfg.model.trans_hidden_dim, eps=self.cfg.model.trans_eps
                 ).to(
                     device=hidden_states.device,
                     dtype=self.encoder.layer[i].attention.output.LayerNorm.weight.dtype,
                 )
-            if torch.isnan(layer.output.LayerNorm.weight).any():
+            while (
+                torch.isnan(self.encoder.layer[i].output.LayerNorm.weight).any()
+                or torch.isnan(self.encoder.layer[i].output.LayerNorm.bias).any()
+            ):
                 self.encoder.layer[i].output.LayerNorm = nn.LayerNorm(
                     self.cfg.model.trans_hidden_dim, eps=self.cfg.model.trans_eps
                 ).to(
@@ -111,17 +121,22 @@ class TransEncoder(nn.Module):
         seq_emb = seq_emb.squeeze(0)
         task = seq_emb[0]
         logits = []
-        dim_sqrt = torch.sqrt(torch.tensor(self.cfg.model.trans_hidden_dim, device=seq_emb.device))
+        dim_sqrt = torch.sqrt(
+            torch.tensor(self.cfg.model.trans_hidden_dim, device=seq_emb.device)
+        )
         for option_pos in options_position_ids:
             option_emb = seq_emb[option_pos]  # [num_embs, dim]
             option_emb = torch.cat(
                 [option_emb, torch.mean(option_emb, dim=0).unsqueeze(0)], dim=0
             )  # [num_embs+1, dim]
+            # option_emb = torch.mean(option_emb, dim=0)  # dim: dim
+
+            # _logit = torch.matmul(task, option_emb) / dim_sqrt
 
             _logits = torch.matmul(task, option_emb.T) / dim_sqrt
             __logits = F.gumbel_softmax(_logits, hard=True)
             _logit = torch.matmul(_logits, __logits.T)
-            logits.append(_logit)   # dim: []
+            logits.append(_logit)  # dim: []
 
         logits = torch.stack(logits, dim=0)  # [num_options]
         return logits.unsqueeze(0)
@@ -193,16 +208,19 @@ class Embeddings(nn.Module):
             [first_part, last_part, sep_emb, *option_part], dim=0
         ).unsqueeze(
             0
-        )  # dim: seq_len, dim
+        )  # dim: 1, seq_len, dim
 
-        position_ids = torch.arange(full_emb.size(0), device=full_emb.device).unsqueeze(
+        position_ids = torch.arange(full_emb.size(1), device=full_emb.device).unsqueeze(
             0
         )
         position_embeddings = self.position_embeddings(position_ids)
 
         embeddings = full_emb + position_embeddings
 
-        if torch.isnan(self.LayerNorm.weight).any():
+        while (
+            torch.isnan(self.LayerNorm.weight).any()
+            or torch.isnan(self.LayerNorm.bias).any()
+        ):
             self.LayerNorm = nn.LayerNorm(
                 self.cfg.model.trans_hidden_dim, eps=self.cfg.model.trans_eps
             ).to(device=embeddings.device, dtype=self.LayerNorm.weight.dtype)

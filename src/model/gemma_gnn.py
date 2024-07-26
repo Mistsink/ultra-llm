@@ -397,7 +397,7 @@ class GNNLLMModel(LlamaModel):
                     self.ent_norm = LlamaRMSNorm(
                         self.cfg.model.trans_hidden_dim, self.config.rms_norm_eps
                     ).to(device=self.device, dtype=ent_emb.dtype)
-                ent_emb = self.ent_norm(ent_emb)  # 使用LLM 的 Norm
+                # ent_emb = self.ent_norm(ent_emb)  # 使用LLM 的 Norm
             else:
                 rel_emb = self.interact_rel_gnn(model_input, hidden_states)
                 while torch.isnan(self.rel_norm.weight).any():
@@ -412,7 +412,7 @@ class GNNLLMModel(LlamaModel):
                             self.config.rms_norm_eps,
                         ).to(device=self.device, dtype=rel_emb.dtype)
 
-                rel_emb = self.rel_norm(rel_emb)
+                # rel_emb = self.rel_norm(rel_emb)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:

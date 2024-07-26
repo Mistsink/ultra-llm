@@ -86,19 +86,23 @@ def decoder_metric_fn(pred: EvalPrediction) -> Dict:
     
     # 获得每个样本预测的排名，按概率降序排列
     ranked_indices = np.argsort(probabilities, axis=-1)[:, ::-1]
-    
-    # 找到正确答案的索引排名
-    rank_of_correct = np.argwhere(ranked_indices == labels[:, None])[:, 1] + 1
+
+    ranks = np.zeros(len(labels))
+
+    # 计算每个查询结果的正确标签排名
+    for i in range(len(labels)):
+        correct_label = labels[i, 0]
+        ranks[i] = np.where(ranked_indices[i] == correct_label)[0][0] + 1 
     
     # 计算各个 hit@k 指标
     k_values = [1, 3, 5, 10]
-    hit_at_k = {f'hit@{k}': np.mean(rank_of_correct <= k) for k in k_values}
+    hit_at_k = {f'hit@{k}': np.mean(ranks <= k) for k in k_values}
     
     # 计算 MR (Mean Rank)
-    mean_rank = np.mean(rank_of_correct)
+    mean_rank = np.mean(ranks)
     
     # 计算 MRR (Mean Reciprocal Rank)
-    mean_reciprocal_rank = np.mean(1.0 / rank_of_correct)
+    mean_reciprocal_rank = np.mean(1.0 / ranks)
     
     # 汇总所有指标
     metrics = {

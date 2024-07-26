@@ -30,6 +30,8 @@ from src.trainer.dataloader import DataloaderMixin
 from src.trainer.metric import metric_fn
 
 
+from torchviz import make_dot
+
 class KGLLMTrainer(DataloaderMixin, Trainer):
     def __init__(
         self,
@@ -79,6 +81,7 @@ class KGLLMTrainer(DataloaderMixin, Trainer):
             outputs: CusCausalLMOutputWithPast = model(
                 input_ids=batch.input_ids, embeds=batch.embs, labels=batch.label_ids
             )
+            # gf = make_dot(outputs.loss, params=dict(model.named_parameters()), show_attrs=True)
             if not model.training and outputs.labels is not None:
                 labels.append(outputs.labels)
 

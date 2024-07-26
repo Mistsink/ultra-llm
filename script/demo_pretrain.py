@@ -64,6 +64,7 @@ def get_data(cfg: Config) -> tuple[InMemoryDataset, CustomData, CustomData, Cust
 
 if __name__ == "__main__":
 
+    # cfg = parse_args("config/pretrain/debug_train_decoder.yaml")
     cfg = parse_args("config/pretrain/train_decoder.yaml")
     transformers.set_seed(cfg.train.seed)
 
