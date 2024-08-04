@@ -60,6 +60,101 @@ class RelNBFNet(BaseNBFNet):
                 nn.Linear(feature_dim, input_dim),
             )
 
+    def bellmanford_layer(
+        self,
+        data,
+        h_index: Optional[torch.Tensor] = None,
+        separate_grad=False,
+        boundary: Optional[torch.Tensor] = None,
+        layer_idx: int = -1,
+    ):
+        if boundary is None:
+            # initialize initial nodes (relations of interest in the batch) with all ones
+            query = torch.ones(
+                h_index.shape[0],
+                self.dims[0],
+                device=h_index.device,
+                dtype=h_index.dtype,
+            )
+            index = h_index.unsqueeze(-1).expand_as(query)
+        else:
+            query = None
+
+        if boundary is None:
+            # 原本的做法是 query_rel 为1，其他全为0，现在使用 LLM 的输出作为 boundary
+            batch_size = len(h_index)
+            # initial (boundary) condition - initialize all node states as zeros
+            boundary = torch.zeros(
+                batch_size, data.num_nodes, self.dims[0], device=h_index.device
+            )
+            # boundary = torch.zeros(data.num_nodes, *query.shape, device=h_index.device)
+            # Indicator function: by the scatter operation we put ones as init features of source (index) nodes
+            boundary.scatter_add_(1, index.unsqueeze(1), query.unsqueeze(1))
+
+        size = (data.num_nodes, data.num_nodes)
+
+        if layer_idx == 0:
+            self.hiddens = []
+            self.edge_weights = []
+            layer_input = boundary
+            edge_weight = torch.ones(
+                data.num_edges, device=h_index.device, dtype=boundary.dtype
+            )
+        else:
+            layer_input = self.hiddens[layer_idx - 1]
+            edge_weight = self.edge_weights[layer_idx - 1]
+
+        layer = self.layers[layer_idx]
+
+        hidden = layer(
+            layer_input,
+            query,
+            boundary,
+            data.edge_index,
+            data.edge_type,
+            size,
+            edge_weight,
+        )
+        if self.short_cut and hidden.shape == layer_input.shape:
+            # residual connection here
+            hidden = hidden + layer_input
+        self.hiddens.append(hidden)
+        self.edge_weights.append(edge_weight)
+
+        if layer_idx == len(self.layers) - 1:
+            if self.concat_hidden:
+                output = torch.cat(self.hiddens, dim=-1)
+                output = self.mlp(output)
+            else:
+                output = hidden
+
+            return {
+                "node_feature": output,
+                "edge_weights": self.edge_weights,
+            }
+        else:
+            return {
+                "node_feature": hidden,
+                "edge_weights": edge_weight,
+            }
+
+    def forward(
+        self,
+        rel_graph,
+        query=None,
+        boundary: Optional[torch.Tensor] = None,
+        layer_idx: int = -1,
+    ):
+
+        # message passing and updated node representations (that are in fact relations)
+        output = self.bellmanford_layer(
+            rel_graph, h_index=query, boundary=boundary, layer_idx=layer_idx
+        )[
+            "node_feature"
+        ]  # (batch_size, num_nodes, hidden_dim）
+
+        return output
+
     def bellmanford(
         self,
         data,
@@ -134,7 +229,9 @@ class RelNBFNet(BaseNBFNet):
             "edge_weights": edge_weights,
         }
 
-    def forward(self, rel_graph, query=None, boundary: Optional[torch.Tensor] = None):
+    def ori_forward(
+        self, rel_graph, query=None, boundary: Optional[torch.Tensor] = None
+    ):
 
         # message passing and updated node representations (that are in fact relations)
         output = self.bellmanford(rel_graph, h_index=query, boundary=boundary)[

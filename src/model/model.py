@@ -2,7 +2,14 @@ from dataclasses import dataclass
 from typing import List, Optional, Union
 import torch
 import torch.nn as nn
-from transformers import GemmaForCausalLM, GemmaTokenizer, GemmaConfig, AutoModelForCausalLM, LlamaForCausalLM, LlamaConfig
+from transformers import (
+    GemmaForCausalLM,
+    GemmaTokenizer,
+    GemmaConfig,
+    AutoModelForCausalLM,
+    LlamaForCausalLM,
+    LlamaConfig,
+)
 from transformers.modeling_outputs import (
     CausalLMOutputWithPast,
     BaseModelOutputWithPast,
@@ -13,6 +20,7 @@ from src.model.layer import MLP
 from src.data.types import PretrainDatasetOutput, ModelInput
 from src.ultra.models import RelNBFNet, EntityNBFNet
 from src.model.gemma_gnn import GNNLLMModel, GNNLLMModelOutput
+from src.model.llm_to_gnn import LLM2GNNModel
 from src.model.type import GNNLLMConfig
 from src.model.transformer import TransEncoder
 
@@ -22,6 +30,7 @@ class GNNLLMOutput(CausalLMOutputWithPast):
     ent_emb: Optional[torch.Tensor] = None
     rel_emb: Optional[torch.Tensor] = None
 
+
 @dataclass
 class CusCausalLMOutputWithPast(CausalLMOutputWithPast):
     labels: Optional[torch.Tensor] = None
@@ -29,12 +38,14 @@ class CusCausalLMOutputWithPast(CausalLMOutputWithPast):
 
 class GNNLLM(LlamaForCausalLM):
     config_class = GNNLLMConfig
+
     def __init__(self, config: LlamaConfig, cfg: Config):
         super().__init__(config)
 
         self.dummy_layer = nn.Linear(3, 3, bias=False)
 
-        self.model = GNNLLMModel(config, cfg=cfg)
+        # self.model = GNNLLMModel(config, cfg=cfg)
+        self.model = LLM2GNNModel(config, cfg=cfg)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -70,7 +81,9 @@ class GNNLLM(LlamaForCausalLM):
         data: Optional[PretrainDatasetOutput] = None,
         embeds: Optional[torch.FloatTensor] = None,
     ) -> Union[CusCausalLMOutputWithPast, GNNLLMOutput]:
-        output_attentions, output_hidden_states, return_dict = self._forward_setup(output_attentions, output_hidden_states, return_dict)
+        output_attentions, output_hidden_states, return_dict = self._forward_setup(
+            output_attentions, output_hidden_states, return_dict
+        )
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         if data is not None:
@@ -122,7 +135,9 @@ class GNNLLM(LlamaForCausalLM):
             # return GNNLLMOutput(ent_emb=ent_out.ent_emb, rel_emb=None)
 
         else:
-            assert embeds is not None, "embeds must be provided when data is None, as to model is a decoder"
+            assert (
+                embeds is not None
+            ), "embeds must be provided when data is None, as to model is a decoder"
             # # LLM As decoder
             # outputs: BaseModelOutputWithPast = self.model(
             #     input_ids=input_ids,
@@ -145,14 +160,16 @@ class GNNLLM(LlamaForCausalLM):
             # options_embs 1, num_options, embes, dim
             pre_embs = embeds[:, :2].unsqueeze(2)
             options_embs = embeds[:, 2:].unsqueeze(2)
-            logits, hidden_out = self.transformer_decoder(pre_embs=pre_embs, options_embs=options_embs)
+            logits, hidden_out = self.transformer_decoder(
+                pre_embs=pre_embs, options_embs=options_embs
+            )
 
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(logits, labels)
 
             logits = logits.float()
-            
+
             # TODO FIXME 这里是为了让返回的 logits 数据变少，否则在 eval 时外部会一直保留积累每个 batch 的 logits，送给 compute_metric fn 中使用
             # logits = logits.argmax(-1).unsqueeze(0)  # [labels != -100]
         else:
@@ -185,17 +202,27 @@ class GNNLLM(LlamaForCausalLM):
 
         return output_attentions, output_hidden_states, return_dict
 
-
     def prepare_inputs_for_generation(
-        self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, cache_position=None, **kwargs
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        **kwargs
     ):
         model_inputs = super().prepare_inputs_for_generation(
-            input_ids, past_key_values=past_key_values, attention_mask=attention_mask, inputs_embeds=inputs_embeds, **kwargs
+            input_ids,
+            past_key_values=past_key_values,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            **kwargs
         )
 
         # TODO need :param embeds
-        model_inputs['embeds'] = kwargs['embeds']
+        model_inputs["embeds"] = kwargs["embeds"]
         return model_inputs
+
 
 class TestModel(nn.Module):
     def __inin__(self):

@@ -42,3 +42,4 @@ config/**/*.yaml
 wandb
 
 *.ipynb
+weight
